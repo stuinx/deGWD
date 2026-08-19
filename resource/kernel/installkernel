@@ -91,6 +91,7 @@ rm -rf /tmp/now.cron
 
 cleanOldKernels() {
   local kernel_type=$1
+  local running_kernel=$(uname -r)
   
 if [[ $kernel_type == "zabbly" ]]; then
   rm -rf /etc/apt/sources.list.d/xanmod-kernel.list
@@ -109,11 +110,11 @@ elif [[ $kernel_type == "liquorix" ]]; then
   rm -rf /etc/apt/keyrings/xanmod.gpg
 fi
   
-  dpkg --list | awk '{print $2}' | grep 'linux-image' | sed "/$kernel_type/d" | while read line; do
+  dpkg --list | awk '{print $2}' | grep 'linux-image' | sed "/$kernel_type/d" | grep -Fv "$running_kernel" | while read -r line; do
     apt autoremove --purge -y $line
   done
 
-  dpkg --list | awk '{print $2}' | grep 'linux-headers' | sed "/$kernel_type/d" | while read line; do
+  dpkg --list | awk '{print $2}' | grep 'linux-headers' | sed "/$kernel_type/d" | grep -Fv "$running_kernel" | while read -r line; do
     apt autoremove --purge -y $line
   done
   

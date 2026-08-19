@@ -1262,7 +1262,7 @@ cat << EOF >/opt/de_GWD/vtrui/config.json
       "listen":"127.0.0.1",
       "protocol":"dokodemo-door",
       "settings":{"network":"tcp,udp","followRedirect":true},
-      "streamSettings":{"sockopt":{"tproxy":"tproxy","mark":255,"tcpFastOpen":true,"tcpMptcp":true}}
+      "streamSettings":{"sockopt":{"tproxy":"tproxy","mark":255}}
     }
   ],
   "outbounds":[
@@ -1694,7 +1694,7 @@ table ip de_GWD {
                 auto-merge
         }
         chain prerouting {
-                type filter hook prerouting priority -280; policy accept;
+                type filter hook prerouting priority mangle; policy accept;
                 meta l4proto udp th dport { 53, 5331, 5332, 5341, 9896, 67, 68, 1900, 5350, 5351, 5353 } accept
                 meta l4proto tcp th dport { 53, 5331, 5332, 5341, 9896, 2195, 2196, 2197, 3689, 5223, 5297 } accept
                 ip daddr @GlobalDNS accept
@@ -1708,7 +1708,7 @@ table ip de_GWD {
                 ip protocol { tcp, udp } tproxy to 127.0.0.1:9896 meta mark set 0x9
         }
         chain output {
-                type route hook output priority -280; policy accept;
+                type route hook output priority mangle; policy accept;
                 meta l4proto udp th dport { 53, 5331, 5332, 5341, 9896, 67, 68, 1900, 5350, 5351, 5353 } accept
                 meta l4proto tcp th dport { 53, 5331, 5332, 5341, 9896, 2195, 2196, 2197, 3689, 5223, 5297 } accept
                 meta mark 0xff accept
@@ -2368,6 +2368,8 @@ if [[ $(jq -r '.FORWARD.Rproxy.server.status' /opt/de_GWD/0conf 2>/dev/null) = "
   /opt/de_GWD/ui-RproxySsave >/dev/null 2>&1
 fi
 
+jq '(.inbounds[] | select(.protocol == "dokodemo-door" and .settings.followRedirect == true).streamSettings.sockopt) |= del(.tcpFastOpen, .tcpMptcp)' /opt/de_GWD/vtrui/config.json | sponge /opt/de_GWD/vtrui/config.json
+
 systemctl restart mosdns
 systemctl restart vtrui
 
@@ -2820,7 +2822,7 @@ echo -e "${YELLOW}9. Change de_GWD password${cRES}"
 echo -e "${YELLOW}0. Update de_GWD${cRES}"
 echo -e "${RED}CTRL+C EXIT${cRES}"
 echo ""
-read -p "Select:" num
+  read -r -p "Select:" num || exit 0
     case "$num" in
     1)
     installGWD
