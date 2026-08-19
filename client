@@ -17,7 +17,7 @@ branch="main"
 
 
 installCMD=`cat << EOF
-bash <(wget --no-check-certificate -qO- https://ghproxy.net/https://raw.githubusercontent.com/jacyl4/de_GWD/main/client)
+bash <(wget --no-check-certificate -qO- https://ghproxy.net/https://raw.githubusercontent.com/stuinx/deGWD/main/client)
 EOF
 `
 
@@ -65,13 +65,22 @@ unset aptPKG
 [[ -z $(dpkg -l | awk '{print$2}' | grep '^moreutils$') ]] && aptPKG+=(moreutils)
 [[ -z $(dpkg -l | awk '{print$2}' | grep '^rng-tools-debian$') ]] && aptPKG+=(rng-tools-debian)
 [[ -z $(dpkg -l | awk '{print$2}' | grep '^chrony$') ]] && aptPKG+=(chrony)
+[[ -z $(dpkg -l | awk '{print$2}' | grep '^cron$') ]] && aptPKG+=(cron)
 [[ -z $(dpkg -l | awk '{print$2}' | grep '^irqbalance$') ]] && [[ $(nproc --all) -gt 1 ]] && aptPKG+=(irqbalance)
 [[ -n $aptPKG ]] && apt update && apt install $(echo ${aptPKG[@]})
 }
 
 pkgDEP2(){
-curl -fsSL https://download.docker.com/linux/debian/gpg | install -m 0644 -D /dev/stdin /usr/share/keyrings/docker-archive-keyring.gpg
-echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/debian $(cat /etc/os-release | grep VERSION= | cut -d'(' -f2 | cut -d')' -f1) stable" >/etc/apt/sources.list.d/docker.list
+install -m 0755 -d /etc/apt/keyrings
+curl -fsSL https://mirrors.ustc.edu.cn/docker-ce/linux/debian/gpg -o /etc/apt/keyrings/docker.asc
+chmod a+r /etc/apt/keyrings/docker.asc
+cat << EOF >/etc/apt/sources.list.d/docker.sources
+Types: deb
+URIs: https://mirrors.ustc.edu.cn/docker-ce/linux/debian
+Suites: bookworm
+Components: stable
+Signed-By: /etc/apt/keyrings/docker.asc
+EOF
 
 
 unset aptPKG
@@ -121,10 +130,10 @@ fi
 if [[ -f "./de_GWD_$architecture.zip" ]]; then
     mv -f ./de_GWD_$architecture.zip /opt/de_GWD/.repo/de_GWD.zip
 else
-    sha256sum_de_GWD=$(curl -fsSLo- https://ghproxy.net/https://raw.githubusercontent.com/jacyl4/de_GWD/main/de_GWD_"$architecture".zip.sha256sum)
+    sha256sum_de_GWD=$(curl -fsSLo- https://ghproxy.net/https://raw.githubusercontent.com/stuinx/deGWD/main/de_GWD_"$architecture".zip.sha256sum)
     if [[ -n $sha256sum_de_GWD ]] && [[ $(checkSum /opt/de_GWD/.repo/de_GWD.zip $sha256sum_de_GWD) = "false" ]]; then
     rm -rf /tmp/de_GWD.zip
-    wget --no-check-certificate --show-progress -cqO /tmp/de_GWD.zip https://ghproxy.net/https://raw.githubusercontent.com/jacyl4/de_GWD/main/de_GWD_"$architecture".zip
+    wget --no-check-certificate --show-progress -cqO /tmp/de_GWD.zip https://ghproxy.net/https://raw.githubusercontent.com/stuinx/deGWD/main/de_GWD_"$architecture".zip
     [[ $(checkSum /tmp/de_GWD.zip $sha256sum_de_GWD) = "false" ]] && rm -rf /tmp/de_GWD.zip && wget --no-check-certificate --show-progress -cqO /tmp/de_GWD.zip https://de-gwd.accxio.workers.dev/de_GWD_"$architecture".zip
     [[ $(checkSum /tmp/de_GWD.zip $sha256sum_de_GWD) = "false" ]] && echo -e "${WHITE}de_GWD Zip${RED} Download Failed${cRES}" && exit
     [[ $(checkSum /tmp/de_GWD.zip $sha256sum_de_GWD) = "true" ]] && mv -f /tmp/de_GWD.zip /opt/de_GWD/.repo/de_GWD.zip
@@ -149,20 +158,20 @@ chmod +x /opt/de_GWD/tcpTime
 
 repoDL(){
 echo -e "${WHITE}[...]\c" && echo -e "\t${WHITE}Repo Download${cRES}\r\c"
-sha256sum_nginx=$(curl -fsSLo- https://raw.githubusercontent.com/jacyl4/de_GWD/$branch/resource/nginx/nginx_"$architecture".sha256sum)
-sha256sum_nginxConf=$(curl -fsSLo- https://raw.githubusercontent.com/jacyl4/de_GWD/$branch/resource/nginx/nginxConf.zip.sha256sum)
-sha256sum_client=$(curl -fsSLo- https://raw.githubusercontent.com/jacyl4/de_GWD/$branch/resource/client/Archive.zip.sha256sum)
+sha256sum_nginx=$(curl -fsSLo- https://raw.githubusercontent.com/stuinx/deGWD/$branch/resource/nginx/nginx_"$architecture".sha256sum)
+sha256sum_nginxConf=$(curl -fsSLo- https://raw.githubusercontent.com/stuinx/deGWD/$branch/resource/nginx/nginxConf.zip.sha256sum)
+sha256sum_client=$(curl -fsSLo- https://raw.githubusercontent.com/stuinx/deGWD/$branch/resource/client/Archive.zip.sha256sum)
 
 if [[ $(checkSum /usr/sbin/nginx $sha256sum_nginx) = "false" ]]; then
 rm -rf /tmp/nginx
-wget --show-progress -cqO /tmp/nginx https://raw.githubusercontent.com/jacyl4/de_GWD/$branch/resource/nginx/nginx_"$architecture"
+wget --show-progress -cqO /tmp/nginx https://raw.githubusercontent.com/stuinx/deGWD/$branch/resource/nginx/nginx_"$architecture"
 [[ $(checkSum /tmp/nginx $sha256sum_nginx) = "false" ]] && echo -e "${WHITE}NGINX Core${RED} Download Failed${cRES}" && exit
 [[ $(checkSum /tmp/nginx $sha256sum_nginx) = "true" ]] && mv -f /tmp/nginx /usr/sbin/nginx && chmod +x /usr/sbin/nginx
 fi
 
 if [[ $(checkSum /opt/de_GWD/.repo/nginxConf.zip $sha256sum_nginxConf) = "false" ]]; then
 rm -rf /tmp/nginxConf.zip
-wget --show-progress -cqO /tmp/nginxConf.zip https://raw.githubusercontent.com/jacyl4/de_GWD/$branch/resource/nginx/nginxConf.zip
+wget --show-progress -cqO /tmp/nginxConf.zip https://raw.githubusercontent.com/stuinx/deGWD/$branch/resource/nginx/nginxConf.zip
 [[ $(checkSum /tmp/nginxConf.zip $sha256sum_nginxConf) = "false" ]] && echo -e "${RED}Download Failed${cRES}" && exit
 [[ $(checkSum /tmp/nginxConf.zip $sha256sum_nginxConf) = "true" ]] && mv -f /tmp/nginxConf.zip /opt/de_GWD/.repo/nginxConf.zip
 fi
@@ -175,17 +184,17 @@ fi
 
 if [[ $(checkSum /opt/de_GWD/.repo/client.zip $sha256sum_client) = "false" ]]; then
 rm -rf /tmp/client.zip
-wget --show-progress -cqO /tmp/client.zip https://raw.githubusercontent.com/jacyl4/de_GWD/$branch/resource/client/Archive.zip
+wget --show-progress -cqO /tmp/client.zip https://raw.githubusercontent.com/stuinx/deGWD/$branch/resource/client/Archive.zip
 [[ $(checkSum /tmp/client.zip $sha256sum_client) = "false" ]] && echo -e "${WHITE}Client Zip${RED} Download Failed${cRES}" && exit
 [[ $(checkSum /tmp/client.zip $sha256sum_client) = "true" ]] && mv -f /tmp/client.zip /opt/de_GWD/.repo/client.zip
 fi
 
 localVer=$(awk 'NR==1' /opt/de_GWD/.repo/version.php 2>/dev/null)
-remoteVer=$(curl -fsSLo- https://raw.githubusercontent.com/jacyl4/de_GWD/main/version.php | head -n 1)
+remoteVer=$(curl -fsSLo- https://raw.githubusercontent.com/stuinx/deGWD/main/version.php | head -n 1)
 
 if [[ $localVer != $remoteVer ]] || [[ ! -f '/opt/de_GWD/.repo/version.php' ]]; then
 rm -rf /opt/de_GWD/.repo/version.php
-wget --show-progress -cqO /opt/de_GWD/.repo/version.php https://raw.githubusercontent.com/jacyl4/de_GWD/main/version.php
+wget --show-progress -cqO /opt/de_GWD/.repo/version.php https://raw.githubusercontent.com/stuinx/deGWD/main/version.php
 [[ $? -ne 0 ]] && echo -e "${WHITE}Version file${RED} Download Failed${cRES}" && exit
 fi
 
@@ -435,19 +444,19 @@ try_connect() {
     local response
 
     while [ $attempt -le $attempts ]; do
-        echo "Attempt $attempt to connect to $url"
+        echo "Attempt $attempt to connect to $url" >&2
         response=$(curl -Is -m $timeout "$url")
         if [ $? -eq 0 ]; then
-            echo "Successfully connected to $url"
+            echo "Successfully connected to $url" >&2
             echo "$response"
             return 0
         else
-            echo "Failed to connect to $url"
+            echo "Failed to connect to $url" >&2
             ((attempt++))
             [ $attempt -le $attempts ] && sleep 1
         fi
     done
-    echo "Failed to connect to $url after $attempts attempts"
+    echo "Failed to connect to $url after $attempts attempts" >&2
     return 1
 }
 
@@ -483,14 +492,14 @@ if [[ $1 = "u" ]]; then
         fi
     fi
 else
-    if [[ -n $serverConnect1 ]] && [[ -n $serverConnect2 ]] && [[ $(systemctl is-active 'vtrui') = "active" ]]; then
+    if ([[ -n $serverConnect1 ]] || [[ -n $serverConnect2 ]]) && [[ $(systemctl is-active 'vtrui') = "active" ]]; then
         echo -e "${WHITE}[ ${GREEN}✓ ${WHITE}]\c" && echo -e "\t${WHITE}de_GWD server connect${cRES}"
     else
         echo -e "${WHITE}[ ${RED}✕ ${WHITE}]\c" && echo -e "\t${WHITE}de_GWD server connect${cRES}"
     fi
 
 
-if [[ -z $serverConnect1 ]] || [[ -z $serverConnect2 ]]; then
+if [[ -z $serverConnect1 ]] && [[ -z $serverConnect2 ]]; then
 serverStatus
 echo -e "\t${RED}Failed! Stop mosdns smartdns nftables.${cRES}"
 cat << EOF >/etc/resolv.conf
@@ -502,7 +511,7 @@ EOF
 systemctl stop mosdns >/dev/null 2>&1
 systemctl stop smartdns >/dev/null 2>&1
 systemctl stop nftables >/dev/null 2>&1
-exit
+exit 1
 fi
 fi
 }
@@ -1117,7 +1126,7 @@ ln -sf /etc/resolvconf/run/resolv.conf /etc/resolv.conf
 elif [[ -f "/run/resolvconf/resolv.conf" ]]; then
 ln -sf /run/resolvconf/resolv.conf /etc/resolv.conf
 fi
-sed -i '/dns-nameservers /d' /etc/network/interfaces
+[[ ! -f /etc/network/interfaces ]] || sed -i '/dns-nameservers /d' /etc/network/interfaces
 resolvconf -u
 echo -e "${WHITE}[ ${GREEN}✓ ${WHITE}]\c" && echo -e "\t${WHITE}Deploy SmartDNS${cRES}"
 
@@ -1216,13 +1225,17 @@ fi
 echo -e "${WHITE}V2 node: ${cRES}"
 echo -e "${WHITE}Domain: \c" && echo -e "\t${WHITE}IP: ${cRES}\r\c"
 systemctl stop mosdns
-sleep 5
-domainIP=$(dig @127.0.0.1 $domain -4p 5332 +short | grep -Po '\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}' | grep -v "127.0.0.1" | xargs -n 1 | awk NR==1)
+domainIP=""
+for ((dnsAttempt=1; dnsAttempt<=5; dnsAttempt++)); do
+domainIP=$(dig @127.0.0.1 $domain -4p 5332 +time=2 +tries=1 +short | grep -Po '\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}' | grep -v "127.0.0.1" | xargs -n 1 | awk NR==1)
+[[ -n $domainIP ]] && break
+sleep 2
+done
 echo -e "${WHITE}Domain: ${YELLOW}$domain\c" && echo -e "\t${WHITE}IP: ${YELLOW}$domainIP${cRES}"
 echo
 echo -e "${BLUE}################################################################# ${cRES}"
 echo
-[[ -z $domainIP ]] && echo -e "${WHITE}V2 node${RED} Failure to resolve${cRES}" && exit 
+[[ -z $domainIP ]] && echo -e "${WHITE}V2 node${RED} Failure to resolve${cRES}" && exit 1
 }
 
 
@@ -2410,7 +2423,7 @@ fi
 
 
 installkernel(){
-bash <(wget --show-progress -cqO- https://raw.githubusercontent.com/jacyl4/de_GWD/main/resource/kernel/installkernel)
+bash <(wget --show-progress -cqO- https://raw.githubusercontent.com/stuinx/deGWD/main/resource/kernel/installkernel)
 }
 
 
