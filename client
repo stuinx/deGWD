@@ -21,11 +21,7 @@ bash <(wget --no-check-certificate -qO- https://ghproxy.net/https://raw.githubus
 EOF
 `
 
-if [[ $architecture = "arm64" ]];then
-chnAPTsource="mirrors.tuna.tsinghua.edu.cn"
-elif [[ $architecture = "amd64" ]]; then
-chnAPTsource="mirrors.aliyun.com"
-fi
+chnAPTsource="mirrors.ustc.edu.cn"
 
 pkgDEP1(){
 if [[ $architecture = "arm64" ]];then
@@ -1262,7 +1258,7 @@ cat << EOF >/opt/de_GWD/vtrui/config.json
       "listen":"127.0.0.1",
       "protocol":"dokodemo-door",
       "settings":{"network":"tcp,udp","followRedirect":true},
-      "streamSettings":{"sockopt":{"tproxy":"tproxy","mark":255,"tcpFastOpen":true,"tcpMptcp":true}}
+      "streamSettings":{"sockopt":{"tproxy":"tproxy","mark":255}}
     }
   ],
   "outbounds":[
@@ -1694,7 +1690,7 @@ table ip de_GWD {
                 auto-merge
         }
         chain prerouting {
-                type filter hook prerouting priority -280; policy accept;
+                type filter hook prerouting priority mangle; policy accept;
                 meta l4proto udp th dport { 53, 5331, 5332, 5341, 9896, 67, 68, 1900, 5350, 5351, 5353 } accept
                 meta l4proto tcp th dport { 53, 5331, 5332, 5341, 9896, 2195, 2196, 2197, 3689, 5223, 5297 } accept
                 ip daddr @GlobalDNS accept
@@ -1708,7 +1704,7 @@ table ip de_GWD {
                 ip protocol { tcp, udp } tproxy to 127.0.0.1:9896 meta mark set 0x9
         }
         chain output {
-                type route hook output priority -280; policy accept;
+                type route hook output priority mangle; policy accept;
                 meta l4proto udp th dport { 53, 5331, 5332, 5341, 9896, 67, 68, 1900, 5350, 5351, 5353 } accept
                 meta l4proto tcp th dport { 53, 5331, 5332, 5341, 9896, 2195, 2196, 2197, 3689, 5223, 5297 } accept
                 meta mark 0xff accept
@@ -1765,10 +1761,10 @@ echo -e "${WHITE}[ ${GREEN}✓ ${WHITE}]\c" && echo -e "\t${WHITE}Deploy nftable
 updateAPT(){
 echo -e "${WHITE}[...]\c" && echo -e "\t${WHITE}Debian Updated${cRES}\r\c"
 cat << EOF >/etc/apt/sources.list
-deb http://cloudfront.debian.net/debian bookworm main contrib non-free non-free-firmware
-deb http://cloudfront.debian.net/debian-security bookworm-security main contrib non-free non-free-firmware
-deb http://cloudfront.debian.net/debian bookworm-updates main contrib non-free non-free-firmware
-deb http://cloudfront.debian.net/debian bookworm-backports main contrib non-free non-free-firmware
+deb https://mirrors.ustc.edu.cn/debian bookworm main contrib non-free non-free-firmware
+deb https://mirrors.ustc.edu.cn/debian-security bookworm-security main contrib non-free non-free-firmware
+deb https://mirrors.ustc.edu.cn/debian bookworm-updates main contrib non-free non-free-firmware
+deb https://mirrors.ustc.edu.cn/debian bookworm-backports main contrib non-free non-free-firmware
 EOF
 
 echo "deb [signed-by=/etc/apt/keyrings/deb.sury.org.gpg] https://packages.sury.org/php/ $(cat /etc/os-release | grep VERSION= | cut -d'(' -f2 | cut -d')' -f1) main" >/etc/apt/sources.list.d/php.list
@@ -2368,6 +2364,8 @@ if [[ $(jq -r '.FORWARD.Rproxy.server.status' /opt/de_GWD/0conf 2>/dev/null) = "
   /opt/de_GWD/ui-RproxySsave >/dev/null 2>&1
 fi
 
+jq '(.inbounds[] | select(.protocol == "dokodemo-door" and .settings.followRedirect == true).streamSettings.sockopt) |= del(.tcpFastOpen, .tcpMptcp)' /opt/de_GWD/vtrui/config.json | sponge /opt/de_GWD/vtrui/config.json
+
 systemctl restart mosdns
 systemctl restart vtrui
 
@@ -2540,9 +2538,9 @@ EOF
 
 if [[ $(cat /etc/os-release | grep VERSION= | cut -d'(' -f2 | cut -d')' -f1) = "stretch" ]]; then
 cat << EOF >/etc/apt/sources.list
-deb http://$chnAPTsource/debian buster main contrib non-free
-deb http://$chnAPTsource/debian buster-updates main contrib non-free
-deb http://$chnAPTsource/debian-security buster/updates main contrib non-free
+deb https://$chnAPTsource/debian buster main contrib non-free
+deb https://$chnAPTsource/debian buster-updates main contrib non-free
+deb https://$chnAPTsource/debian-security buster/updates main contrib non-free
 EOF
 
 sed -i "s/ stretch / buster /g" /etc/apt/sources.list.d/* >/dev/null 2>&1
@@ -2551,10 +2549,10 @@ apt full-upgrade -y && apt autoremove --purge -y && apt clean -y && apt autoclea
 fi
 
 cat << EOF >/etc/apt/sources.list
-deb http://$chnAPTsource/debian bookworm main contrib non-free non-free-firmware
-deb http://$chnAPTsource/debian bookworm-updates main contrib non-free non-free-firmware
-deb http://$chnAPTsource/debian bookworm-backports main contrib non-free non-free-firmware
-deb http://$chnAPTsource/debian-security bookworm-security main contrib non-free non-free-firmware
+deb https://$chnAPTsource/debian bookworm main contrib non-free non-free-firmware
+deb https://$chnAPTsource/debian bookworm-updates main contrib non-free non-free-firmware
+deb https://$chnAPTsource/debian bookworm-backports main contrib non-free non-free-firmware
+deb https://$chnAPTsource/debian-security bookworm-security main contrib non-free non-free-firmware
 EOF
 
 sed -i "s/ buster / bookworm /g" /etc/apt/sources.list.d/* >/dev/null 2>&1
@@ -2820,7 +2818,7 @@ echo -e "${YELLOW}9. Change de_GWD password${cRES}"
 echo -e "${YELLOW}0. Update de_GWD${cRES}"
 echo -e "${RED}CTRL+C EXIT${cRES}"
 echo ""
-read -p "Select:" num
+  read -r -p "Select:" num || exit 0
     case "$num" in
     1)
     installGWD
