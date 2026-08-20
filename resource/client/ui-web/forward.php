@@ -353,6 +353,7 @@ print <<<EOT
       </div>
       <div class="modal-body">
         <div id="FWD0qrcode$FWD0num" class="text-center"></div>
+        <div id="FWD0link$FWD0num" class="text-break text-center mt-2"></div>
       </div>
     </div>
   </div>
@@ -458,6 +459,7 @@ print <<<EOT
       </div>
       <div class="modal-body">
         <div id="FWD1qrcode$FWD1num" class="text-center"></div>
+        <div id="FWD1link$FWD1num" class="text-break text-center mt-2"></div>
       </div>
     </div>
   </div>
@@ -784,6 +786,7 @@ $.get('./act/FWD0qr.php', {FWD0index:FWD0index}, function(data){
 $('#FWD0qrcode'+FWD0index).empty()
 $('#FWD0qrpop'+FWD0index).modal('show')
 $('#FWD0qrcode'+FWD0index).qrcode({width: 240,height: 240,correctLevel:0,text:data})
+$('#FWD0link'+FWD0index).text(data)
 })
 }
 
@@ -801,6 +804,7 @@ $.get('./act/FWD1qr.php', {FWD1index:FWD1index}, function(data){
 $('#FWD1qrcode'+FWD1index).empty()
 $('#FWD1qrpop'+FWD1index).modal('show')
 $('#FWD1qrcode'+FWD1index).qrcode({width: 240,height: 240,correctLevel:0,text:data})
+$('#FWD1link'+FWD1index).text(data)
 })
 }
 

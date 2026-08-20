@@ -1921,6 +1921,8 @@ subAddr=$(echo -n "$(jq -r '.inbounds[0].settings.clients[0].id' /opt/de_GWD/vtr
 subUrl="vmess://${subAddr}?encryption=auto&type=ws&security=tls&tlsAllowInsecure=false&path=${path}&host=${vpsdomain}&sni=${vpsdomain}&tfo=1#${vpsdomain}:${port}"
 qrencode -t UTF8 -s 1 -m 3 $subUrl
 echo
+echo -e "${YELLOW}$subUrl${cRES}"
+echo
 echo -e "${BLUE}-------------------------------------------------- ${cRES}"
 }
 
