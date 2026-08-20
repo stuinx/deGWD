@@ -9,6 +9,7 @@ WHITE='\E[1;37m'
 cRES='\E[0m'
 architecture=$(dpkg --print-architecture)
 export DEBIAN_FRONTEND=noninteractive
+[[ -f "/etc/apt/sources.list.d/debian.sources" ]] && mv -f "/etc/apt/sources.list.d/debian.sources" "/etc/apt/debian.sources.disabled"
 cat << EOF >/etc/apt/apt.conf.d/01InstallLess
 APT::Get::Assume-Yes "true";
 APT::Install-Recommends "false";

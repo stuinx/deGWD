@@ -23,6 +23,8 @@ EOF
 
 chnAPTsource="mirrors.ustc.edu.cn"
 
+[[ -f "/etc/apt/sources.list.d/debian.sources" ]] && mv -f "/etc/apt/sources.list.d/debian.sources" "/etc/apt/debian.sources.disabled"
+
 pkgDEP1(){
 if [[ $architecture = "arm64" ]];then
 unset Freeze_Package

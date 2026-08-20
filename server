@@ -15,6 +15,8 @@ architecture=$(dpkg --print-architecture)
 export DEBIAN_FRONTEND=noninteractive
 branch="fix"
 
+[[ -f "/etc/apt/sources.list.d/debian.sources" ]] && mv -f "/etc/apt/sources.list.d/debian.sources" "/etc/apt/debian.sources.disabled"
+
 getTopDomain(){
 local host=${1%%:*}
 host=${host%.}
