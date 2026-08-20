@@ -264,7 +264,7 @@ ukDDFZMifwa03yTHD/a57O4dFOnzsEVojBnbzQ7W7w==
 -----END PGP PUBLIC KEY BLOCK-----
 EOF
 cat /tmp/xanmod.gpg.key | gpg --dearmor >/etc/apt/keyrings/xanmod.gpg
-echo "deb [signed-by=/etc/apt/keyrings/xanmod.gpg] http://deb.xanmod.org releases main" >/etc/apt/sources.list.d/xanmod-kernel.list
+echo "deb [signed-by=/etc/apt/keyrings/xanmod.gpg] https://deb.xanmod.org releases main" >/etc/apt/sources.list.d/xanmod-kernel.list
 
 apt update && apt install linux-xanmod-x64$CPU_LEVEL
 
@@ -299,7 +299,7 @@ if [[ $architecture != "amd64" ]]; then
 elif [[ $architecture == "amd64" ]]; then
 curl -fsSLo /tmp/liquorix.gpg.key https://liquorix.net/liquorix-keyring.gpg
 cat /tmp/liquorix.gpg.key | gpg --dearmor >/etc/apt/keyrings/liquorix.gpg
-echo "deb [signed-by=/etc/apt/keyrings/liquorix.gpg] http://liquorix.net/debian $(cat /etc/os-release | grep VERSION= | cut -d'(' -f2 | cut -d')' -f1) main" >/etc/apt/sources.list.d/liquorix-kernel.list
+echo "deb [signed-by=/etc/apt/keyrings/liquorix.gpg] https://liquorix.net/debian $(cat /etc/os-release | grep VERSION= | cut -d'(' -f2 | cut -d')' -f1) main" >/etc/apt/sources.list.d/liquorix-kernel.list
 
 apt update && apt install linux-image-liquorix-amd64 linux-headers-liquorix-amd64
 

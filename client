@@ -21,11 +21,7 @@ bash <(wget --no-check-certificate -qO- https://ghproxy.net/https://raw.githubus
 EOF
 `
 
-if [[ $architecture = "arm64" ]];then
-chnAPTsource="mirrors.tuna.tsinghua.edu.cn"
-elif [[ $architecture = "amd64" ]]; then
-chnAPTsource="mirrors.aliyun.com"
-fi
+chnAPTsource="mirrors.ustc.edu.cn"
 
 pkgDEP1(){
 if [[ $architecture = "arm64" ]];then
@@ -1765,10 +1761,10 @@ echo -e "${WHITE}[ ${GREEN}✓ ${WHITE}]\c" && echo -e "\t${WHITE}Deploy nftable
 updateAPT(){
 echo -e "${WHITE}[...]\c" && echo -e "\t${WHITE}Debian Updated${cRES}\r\c"
 cat << EOF >/etc/apt/sources.list
-deb http://cloudfront.debian.net/debian bookworm main contrib non-free non-free-firmware
-deb http://cloudfront.debian.net/debian-security bookworm-security main contrib non-free non-free-firmware
-deb http://cloudfront.debian.net/debian bookworm-updates main contrib non-free non-free-firmware
-deb http://cloudfront.debian.net/debian bookworm-backports main contrib non-free non-free-firmware
+deb https://mirrors.ustc.edu.cn/debian bookworm main contrib non-free non-free-firmware
+deb https://mirrors.ustc.edu.cn/debian-security bookworm-security main contrib non-free non-free-firmware
+deb https://mirrors.ustc.edu.cn/debian bookworm-updates main contrib non-free non-free-firmware
+deb https://mirrors.ustc.edu.cn/debian bookworm-backports main contrib non-free non-free-firmware
 EOF
 
 echo "deb [signed-by=/etc/apt/keyrings/deb.sury.org.gpg] https://packages.sury.org/php/ $(cat /etc/os-release | grep VERSION= | cut -d'(' -f2 | cut -d')' -f1) main" >/etc/apt/sources.list.d/php.list
@@ -2542,9 +2538,9 @@ EOF
 
 if [[ $(cat /etc/os-release | grep VERSION= | cut -d'(' -f2 | cut -d')' -f1) = "stretch" ]]; then
 cat << EOF >/etc/apt/sources.list
-deb http://$chnAPTsource/debian buster main contrib non-free
-deb http://$chnAPTsource/debian buster-updates main contrib non-free
-deb http://$chnAPTsource/debian-security buster/updates main contrib non-free
+deb https://$chnAPTsource/debian buster main contrib non-free
+deb https://$chnAPTsource/debian buster-updates main contrib non-free
+deb https://$chnAPTsource/debian-security buster/updates main contrib non-free
 EOF
 
 sed -i "s/ stretch / buster /g" /etc/apt/sources.list.d/* >/dev/null 2>&1
@@ -2553,10 +2549,10 @@ apt full-upgrade -y && apt autoremove --purge -y && apt clean -y && apt autoclea
 fi
 
 cat << EOF >/etc/apt/sources.list
-deb http://$chnAPTsource/debian bookworm main contrib non-free non-free-firmware
-deb http://$chnAPTsource/debian bookworm-updates main contrib non-free non-free-firmware
-deb http://$chnAPTsource/debian bookworm-backports main contrib non-free non-free-firmware
-deb http://$chnAPTsource/debian-security bookworm-security main contrib non-free non-free-firmware
+deb https://$chnAPTsource/debian bookworm main contrib non-free non-free-firmware
+deb https://$chnAPTsource/debian bookworm-updates main contrib non-free non-free-firmware
+deb https://$chnAPTsource/debian bookworm-backports main contrib non-free non-free-firmware
+deb https://$chnAPTsource/debian-security bookworm-security main contrib non-free non-free-firmware
 EOF
 
 sed -i "s/ buster / bookworm /g" /etc/apt/sources.list.d/* >/dev/null 2>&1
