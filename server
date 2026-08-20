@@ -1560,6 +1560,7 @@ fi
 
 
 installkernel(){
+printf '\n'
 bash <(wget --show-progress -cqO- https://raw.githubusercontent.com/stuinx/deGWD/$branch/resource/kernel/installkernel)
 }
 

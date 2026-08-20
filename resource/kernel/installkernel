@@ -189,6 +189,8 @@ if [[ -z $(apt-cache policy linux-zabbly 2>/dev/null | awk '$1 == "Candidate:" &
   echo -e "${WHITE}[ ${YELLOW}! ${WHITE}]\c" && echo -e "\t${YELLOW}Clear up & Exit${cRES}"
   exit 1
 fi
+apt clean
+apt autoclean
 apt install -y linux-zabbly
 
 if [[ -n $(dpkg --list | grep linux-image | grep zabbly) ]]; then
@@ -345,6 +347,7 @@ echo -e "${GREEN}[2]: Install XanMod kernel and reboot ${cRES}"
 echo -e "${GREEN}[3]: Install Liquorix kernel and reboot ${cRES}"
 echo -e "${GREEN}======================================== ${cRES}"
 read -s -n 1 kernelSwitch
+printf '\n'
 
 case $kernelSwitch in
   "1")
