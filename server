@@ -1561,7 +1561,8 @@ fi
 
 installkernel(){
 printf '\n'
-bash <(wget --show-progress -cqO- https://raw.githubusercontent.com/stuinx/deGWD/$branch/resource/kernel/installkernel)
+echo -e "${WHITE}[...]\c" && echo -e "\t${WHITE}Kernel installer${cRES}"
+bash <(wget -qO- https://raw.githubusercontent.com/stuinx/deGWD/$branch/resource/kernel/installkernel)
 }
 
 
