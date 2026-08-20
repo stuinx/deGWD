@@ -44,6 +44,7 @@ unset aptPKG
 [[ -z $(dpkg -l | awk '{print$2}' | grep '^cron$') ]] && aptPKG+=(cron)
 [[ -n $aptPKG ]] && apt update && apt install -y $(echo ${aptPKG[@]})
 mkdir -p /boot/grub
+mkdir -p /etc/apt/keyrings
 rm -f /var/cache/apt/archives/lock
 rm -f /var/lib/apt/lists/lock
 rm -f /var/lib/dpkg/lock
@@ -98,14 +99,17 @@ if [[ $kernel_type == "zabbly" ]]; then
   rm -rf /etc/apt/keyrings/xanmod.gpg
   rm -rf /etc/apt/sources.list.d/liquorix-kernel.list
   rm -rf /etc/apt/keyrings/liquorix.gpg
+  rm -rf /etc/apt/keyrings/zabbly.asc
 elif [[ $kernel_type == "xanmod" ]]; then
   rm -rf /etc/apt/sources.list.d/zabbly-kernel.list
   rm -rf /etc/apt/keyrings/zabbly.gpg
+  rm -rf /etc/apt/keyrings/zabbly.asc
   rm -rf /etc/apt/sources.list.d/liquorix-kernel.list
   rm -rf /etc/apt/keyrings/liquorix.gpg
 elif [[ $kernel_type == "liquorix" ]]; then
   rm -rf /etc/apt/sources.list.d/zabbly-kernel.list
   rm -rf /etc/apt/keyrings/zabbly.gpg
+  rm -rf /etc/apt/keyrings/zabbly.asc
   rm -rf /etc/apt/sources.list.d/xanmod-kernel.list
   rm -rf /etc/apt/keyrings/xanmod.gpg
 fi
@@ -176,7 +180,15 @@ ZBqN6R8SuRc5NWWPDcSdr1myXY2YpB0AVEV8zGtF
 EOF
 echo "deb [signed-by=/etc/apt/keyrings/zabbly.asc] https://pkgs.zabbly.com/kernel/stable $(cat /etc/os-release | grep VERSION= | cut -d'(' -f2 | cut -d')' -f1) main" >/etc/apt/sources.list.d/zabbly-kernel.list
 
-apt update && apt install linux-zabbly
+apt update
+if [[ -z $(apt-cache policy linux-zabbly 2>/dev/null | awk '$1 == "Candidate:" && $2 != "(none)" {print $2}') ]]; then
+  echo -e "${WHITE}[ ${RED}✕ ${WHITE}]\c" && echo -e "\t${WHITE}Zabbly package index unavailable${cRES}"
+  rm -rf /etc/apt/sources.list.d/zabbly-kernel.list
+  rm -rf /etc/apt/keyrings/zabbly.gpg /etc/apt/keyrings/zabbly.asc
+  echo -e "${WHITE}[ ${YELLOW}! ${WHITE}]\c" && echo -e "\t${YELLOW}Clear up & Exit${cRES}"
+  exit 1
+fi
+apt install -y linux-zabbly
 
 if [[ -n $(dpkg --list | grep linux-image | grep zabbly) ]]; then
   cleanOldKernels "zabbly"
@@ -192,7 +204,7 @@ else
   done
 
   rm -rf /etc/apt/sources.list.d/zabbly-kernel.list
-  rm -rf /etc/apt/keyrings/zabbly.gpg
+  rm -rf /etc/apt/keyrings/zabbly.gpg /etc/apt/keyrings/zabbly.asc
   echo -e "${WHITE}[ ${YELLOW}! ${WHITE}]\c" && echo -e "\t${YELLOW}Clear up & Exit${cRES}"
   exit
 fi

@@ -13,7 +13,7 @@ chmod 777 /tmp
 architecture=$(dpkg --print-architecture)
 [[ "openvz lxc lxc-libvirt systemd-nspawn docker podman proot pouch" =~ $(systemd-detect-virt) ]] && virt_type="container"
 export DEBIAN_FRONTEND=noninteractive
-branch="main"
+branch="fix"
 
 getTopDomain(){
 local host=${1%%:*}
@@ -133,11 +133,11 @@ wget --show-progress -cqO /tmp/sample.zip https://raw.githubusercontent.com/stui
 fi
 
 localVer=$(awk 'NR==1' /opt/de_GWD/version.php 2>/dev/null)
-remoteVer=$(curl -fsSLo- https://raw.githubusercontent.com/stuinx/deGWD/main/version.php | head -n 1)
+remoteVer=$(curl -fsSLo- https://raw.githubusercontent.com/stuinx/deGWD/$branch/version.php | head -n 1)
 
 if [[ $localVer != $remoteVer ]]; then
 rm -rf /tmp/version.php
-wget --show-progress -cqO /tmp/version.php https://raw.githubusercontent.com/stuinx/deGWD/main/version.php
+wget --show-progress -cqO /tmp/version.php https://raw.githubusercontent.com/stuinx/deGWD/$branch/version.php
 [[ $? -ne 0 ]] && echo -e "${WHITE}Version File${RED} Download Failed${cRES}" && exit
 [[ $(du -sk /tmp/version.php 2>/dev/null | awk '{print$1}') -ge 4 ]] && mv -f /tmp/version.php /opt/de_GWD/version.php
 fi
@@ -1558,7 +1558,7 @@ fi
 
 
 installkernel(){
-bash <(wget --show-progress -cqO- https://raw.githubusercontent.com/stuinx/deGWD/main/resource/kernel/installkernel)
+bash <(wget --show-progress -cqO- https://raw.githubusercontent.com/stuinx/deGWD/$branch/resource/kernel/installkernel)
 }
 
 
@@ -2058,8 +2058,9 @@ checkKernel
 enableAutoUpdate(){
 cat << "EOF" >/opt/de_GWD/autoUpdate
 #!/bin/bash
+branch="fix"
 localVer=$(awk 'NR==1' /opt/de_GWD/version.php)
-remoteVer=$(curl -fsSLo- https://raw.githubusercontent.com/stuinx/deGWD/main/version.php | head -n 1)
+remoteVer=$(curl -fsSLo- https://raw.githubusercontent.com/stuinx/deGWD/$branch/version.php | head -n 1)
 
 echo $localVer >/tmp/de_GWD_Ver
 echo $remoteVer >>/tmp/de_GWD_Ver
@@ -2068,7 +2069,7 @@ VerCP=$(cat /tmp/de_GWD_Ver | sort -rV | uniq | awk NR==2)
 
 if [[ $VerCP == $localVer ]]; then
 rm -rf /tmp/autoUpdate
-wget -t 5 -T 10 -cqO /tmp/autoUpdate https://raw.githubusercontent.com/stuinx/deGWD/main/server
+wget -t 5 -T 10 -cqO /tmp/autoUpdate https://raw.githubusercontent.com/stuinx/deGWD/$branch/server
 
 if [[ $(du -sk /tmp/autoUpdate 2>/dev/null | awk '{print$1}') -gt 70 ]]; then
 sed -i '$d' /tmp/autoUpdate
