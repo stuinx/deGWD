@@ -41,6 +41,7 @@ unset aptPKG
 [[ -z $(dpkg -l | awk '{print$2}' | grep '^resolvconf$') ]] && aptPKG+=(resolvconf)
 [[ -z $(dpkg -l | awk '{print$2}' | grep '^nftables$') ]] && aptPKG+=(nftables)
 [[ -z $(dpkg -l | awk '{print$2}' | grep '^ca-certificates$') ]] && aptPKG+=(ca-certificates)
+[[ -z $(dpkg -l | awk '{print$2}' | grep '^cron$') ]] && aptPKG+=(cron)
 [[ -z $(dpkg -l | awk '{print$2}' | grep '^apt-transport-https$') ]] && aptPKG+=(apt-transport-https)
 [[ -z $(dpkg -l | awk '{print$2}' | grep '^gnupg2$') ]] && aptPKG+=(gnupg2)
 [[ -z $(dpkg -l | awk '{print$2}' | grep '^unzip$') ]] && aptPKG+=(unzip)
@@ -61,6 +62,7 @@ unset aptPKG
 if [[ -n $aptPKG ]]; then
 apt update && apt install -y "${aptPKG[@]}" || return 1
 fi
+systemctl enable --now cron >/dev/null 2>&1 || return 1
 return 0
 }
 
@@ -194,14 +196,19 @@ rm -rf /etc/systemd/system/rc_online.service
 systemctl daemon-reload >/dev/null
 fi
 
-service cron stop
+if ! command -v crontab >/dev/null 2>&1; then
+  apt update && apt install -y cron || return 1
+fi
+systemctl enable --now cron >/dev/null 2>&1 || return 1
+systemctl stop cron >/dev/null 2>&1 || return 1
 
 ethernetnum=$(find /sys/class/net ! -type d | xargs --max-args=1 realpath | grep 'device' | xargs -n 1 | grep -v 'virtual' | grep -v 'ifb' | awk -F'/' '{print$NF}' | head -n1)
 localAddrCIDR=$(ip -4 a | grep "$ethernetnum" | grep -Po '\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}/\d{1,2}\b' | head -n 1)
 localAddr=$(echo $localAddrCIDR | cut -d/ -f1)
 
 domain=$(awk '/server_name/ {print$2;exit}' /etc/nginx/conf.d/default.conf | sed 's/.$//')
-topDomain=$(echo $domain | rev | awk -F. '{print $1"."$2}' | rev)
+topDomain=${domain#*.}
+[[ $topDomain != *.* ]] && topDomain=""
 port=$(awk '/ssl .* reuseport/ {print$2}' /etc/nginx/conf.d/default.conf | grep '^[[:digit:]]*$' | head -n1)
 [[ -z $port ]] && port="443"
 
@@ -1072,13 +1079,40 @@ echo -e "${WHITE}[ ${GREEN}✓ ${WHITE}]\c" && echo -e "\t${WHITE}Install NGINX$
 
 
 
-makeSSL_D(){
-crontab -l 2>/dev/null >/tmp/now.cron
-sed -i '/acme.sh/d' /tmp/now.cron
-crontab /tmp/now.cron
-rm -rf /tmp/now.cron
-rm -rf "/root/.acme.sh"
+acmeSetup(){
+if [[ ! -x "/root/.acme.sh/acme.sh" ]]; then
+  acmeScript=/tmp/de_GWD-acme.sh
+  rm -f "$acmeScript"
+  if ! curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors -o "$acmeScript" https://get.acme.sh ||
+     ! sh "$acmeScript" ||
+     [[ ! -x "/root/.acme.sh/acme.sh" ]]; then
+    rm -f "$acmeScript"
+    echo -e "${WHITE}acme.sh${RED} Install Failed${cRES}"
+    return 1
+  fi
+  rm -f "$acmeScript"
+fi
+"/root/.acme.sh"/acme.sh --upgrade --auto-upgrade || return 1
+"/root/.acme.sh"/acme.sh --set-default-ca --server letsencrypt || return 1
+}
 
+
+
+sslDeploy(){
+if [[ ! -s "/var/www/ssl/de_GWD.cer" ]] || [[ ! -s "/var/www/ssl/de_GWD.key" ]] ||
+   ! openssl x509 -in /var/www/ssl/de_GWD.cer -noout >/dev/null 2>&1 ||
+   ! openssl x509 -in /var/www/ssl/de_GWD.cer -checkhost "$domain" -noout >/dev/null 2>&1; then
+  echo -e "${WHITE}TLS certificate${RED} Install Failed${cRES}"
+  return 1
+fi
+chmod 644 /var/www/ssl/*.key || return 1
+nginx -t >/dev/null 2>&1 || return 1
+systemctl force-reload nginx || return 1
+}
+
+
+
+makeSSL_D(){
 export CF_Key="$CFapikey"
 export CF_Email="$CFemail"
 
@@ -1093,32 +1127,24 @@ else
 systemctl force-reload nginx
 fi
 
-rm -rf /var/www/ssl/*.cer
-rm -rf /var/www/ssl/*.key
-find /var/www/ssl/*.pem | grep -v "dhparam.pem" | xargs -I {} rm -rf {}
-
-curl https://get.acme.sh | sh
-"/root/.acme.sh"/acme.sh --upgrade  --auto-upgrade
-"/root/.acme.sh"/acme.sh --set-default-ca  --server letsencrypt
-"/root/.acme.sh"/acme.sh --issue --dns dns_cf -d $topDomain -d *.$topDomain -k ec-256 --dnssleep 180
-"/root/.acme.sh"/acme.sh --installcert -d $topDomain \
+acmeSetup || return 1
+if [[ -n $topDomain ]]; then
+  "/root/.acme.sh"/acme.sh --issue --dns dns_cf -d "$domain" -d "*.$topDomain" -k ec-256 --dnssleep 180 || return 1
+else
+  "/root/.acme.sh"/acme.sh --issue --dns dns_cf -d "$domain" -k ec-256 --dnssleep 180 || return 1
+fi
+"/root/.acme.sh"/acme.sh --installcert -d "$domain" \
                --key-file       /var/www/ssl/de_GWD.key  \
                --fullchain-file /var/www/ssl/de_GWD.cer \
                --reloadcmd     "systemctl force-reload nginx" \
-               --ecc
+               --ecc || return 1
 
-chmod 644 /var/www/ssl/*.key
+sslDeploy || return 1
 }
 
 
 
 makeSSL_W(){
-crontab -l 2>/dev/null >/tmp/now.cron
-sed -i '/acme.sh/d' /tmp/now.cron
-crontab /tmp/now.cron
-rm -rf /tmp/now.cron
-rm -rf "/root/.acme.sh"
-
 rm -rf /etc/nginx/conf.d/80.conf
 rm -rf /etc/nginx/conf.d/default.conf
 cat << EOF >/etc/nginx/conf.d/default.conf
@@ -1143,21 +1169,15 @@ else
 systemctl force-reload nginx
 fi
 
-rm -rf /var/www/ssl/*.cer
-rm -rf /var/www/ssl/*.key
-find /var/www/ssl/*.pem | grep -v "dhparam.pem" | xargs -I {} rm -rf {}
-
-curl https://get.acme.sh | sh
-"/root/.acme.sh"/acme.sh --upgrade  --auto-upgrade
-"/root/.acme.sh"/acme.sh --set-default-ca  --server letsencrypt
-"/root/.acme.sh"/acme.sh --issue -d $domain -w /var/www/html -k ec-256
-"/root/.acme.sh"/acme.sh --installcert -d $domain \
+acmeSetup || return 1
+"/root/.acme.sh"/acme.sh --issue -d "$domain" -w /var/www/html -k ec-256 || return 1
+"/root/.acme.sh"/acme.sh --installcert -d "$domain" \
                --key-file       /var/www/ssl/de_GWD.key  \
                --fullchain-file /var/www/ssl/de_GWD.cer \
                --reloadcmd     "systemctl force-reload nginx" \
-               --ecc
+               --ecc || return 1
 
-chmod 644 /var/www/ssl/*.key
+sslDeploy || return 1
 }
 
 
@@ -1424,15 +1444,16 @@ chmod +x /opt/de_GWD/Q2H
 
 cat << "EOF" >/opt/de_GWD/Qday
 #!/bin/bash
-if [[ -n $(openssl x509 -enddate -noout -in /var/www/ssl/de_GWD.cer -checkend 259200 | grep "Certificate will expire") ]] && [[ -d "/root/.acme.sh" ]]; then
-"/root/.acme.sh"/acme.sh --set-default-ca  --server letsencrypt
-"/root/.acme.sh"/acme.sh --cron --force --home "/root/.acme.sh"
-
-sslFolder=$(ls "/root/.acme.sh" | grep '_ecc')
-cp -f "/root/.acme.sh"/$sslFolder/fullchain.cer /var/www/ssl/de_GWD.cer
-cp -f "/root/.acme.sh"/$sslFolder/*.key /var/www/ssl/de_GWD.key
-
-chmod 644 /var/www/ssl/*.key
+if [[ -n $(openssl x509 -enddate -noout -in /var/www/ssl/de_GWD.cer -checkend 259200 | grep "Certificate will expire") ]] && [[ -x "/root/.acme.sh/acme.sh" ]]; then
+sslDomain=$(awk '/server_name/ {print $2; exit}' /etc/nginx/conf.d/default.conf | sed 's/.$//')
+if "/root/.acme.sh"/acme.sh --set-default-ca --server letsencrypt &&
+   "/root/.acme.sh"/acme.sh --cron --force --home "/root/.acme.sh" &&
+   "/root/.acme.sh"/acme.sh --installcert -d "$sslDomain" \
+     --key-file /var/www/ssl/de_GWD.key \
+     --fullchain-file /var/www/ssl/de_GWD.cer \
+     --reloadcmd "systemctl force-reload nginx" --ecc; then
+  chmod 644 /var/www/ssl/*.key
+fi
 fi
 EOF
 chmod +x /opt/de_GWD/Qday
@@ -1474,7 +1495,7 @@ cat << EOF >>/tmp/now.cron
 EOF
 crontab /tmp/now.cron
 rm -rf /tmp/now.cron
-service cron restart
+systemctl enable --now cron >/dev/null 2>&1 || return 1
 
 echo -e "${WHITE}[ ${GREEN}✓ ${WHITE}]\c" && echo -e "\t${WHITE}Post Install${cRES}"
 
@@ -1592,14 +1613,15 @@ changeDomain(){
     read vpsdomainP
 
 domain=$(echo $vpsdomainP | cut -d: -f1)
-topDomain=$(echo $domain | rev | awk -F. '{print $1"."$2}' | rev)
+topDomain=${domain#*.}
+[[ $topDomain != *.* ]] && topDomain=""
 port=$(echo $vpsdomainP | cut -d: -f2| grep '^[[:digit:]]*$')
 [[ -z $port ]] && port="443"
 
 path=$(jq -r '.inbounds[0].streamSettings.wsSettings.path' /opt/de_GWD/vtrui/config.json 2>/dev/null | grep -v '^null$')
 
 if [[ $port = "443" ]]; then
-makeSSL_W
+makeSSL_W || return 1
 
 else
     echo -e "${GREEN}=============================== ${cRES}"
@@ -1612,7 +1634,7 @@ else
     echo -e "${GREEN}=============================== ${cRES}"
     read CFemail
 
-makeSSL_D
+makeSSL_D || return 1
 fi
 
 nginxWebConf
@@ -1636,7 +1658,8 @@ changeXrayVerify(){
     read npath
 
 domain=$(awk '/server_name/ {print$2;exit}' /etc/nginx/conf.d/default.conf | sed 's/.$//')
-topDomain=$(echo $domain | rev | awk -F. '{print $1"."$2}' | rev)
+topDomain=${domain#*.}
+[[ $topDomain != *.* ]] && topDomain=""
 port=$(awk '/ssl .* reuseport/ {print$2}' /etc/nginx/conf.d/default.conf | grep '^[[:digit:]]*$')
 
 path=$npath
@@ -1952,7 +1975,8 @@ ensureZabblyKernel || exit 1
     read vpsdomainP
 
 domain=$(echo $vpsdomainP | cut -d: -f1)
-topDomain=$(echo $domain | rev | awk -F. '{print $1"."$2}' | rev)
+topDomain=${domain#*.}
+[[ $topDomain != *.* ]] && topDomain=""
 port=$(echo $vpsdomainP | cut -d: -f2 | grep '^[[:digit:]]*$')
 [[ -z $port ]] && port="443"
 
@@ -2011,7 +2035,7 @@ sed -i "s/ bullseye / bookworm /g" /etc/apt/sources.list.d/* >/dev/null 2>&1
 apt update --fix-missing && apt upgrade --allow-downgrades -y
 apt full-upgrade -y && apt autoremove --purge -y && apt clean -y && apt autoclean -y
 
-preInstall
+preInstall || exit 1
 
 [[ $virt_type != "container" ]] && installNftables
 
@@ -2024,9 +2048,9 @@ installNginx
 installXray
 
 if [[ $port == "443" ]]; then
-makeSSL_W
+makeSSL_W || exit 1
 else
-makeSSL_D
+makeSSL_D || exit 1
 fi
 
 nginxWebConf
@@ -2035,7 +2059,7 @@ XrayInbound
 
 XrayOutboundDirect
 
-postInstall
+postInstall || exit 1
 
 enableAutoUpdate
 
@@ -2051,7 +2075,7 @@ updateGWD(){
 
 preUpdate
 
-preInstall
+preInstall || exit 1
 
 [[ $virt_type != "container" ]] && installNftables
 
@@ -2069,7 +2093,7 @@ XrayInbound
 
 XrayOutboundDirect
 
-postInstall
+postInstall || exit 1
 
 echo -e "${WHITE}[ ${GREEN}✓ ${WHITE}]\c" && echo -e "\t${WHITE}de_GWD ${GREEN}Updated${cRES}"
 

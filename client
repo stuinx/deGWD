@@ -56,6 +56,7 @@ unset aptPKG
 [[ -z $(dpkg -l | awk '{print$2}' | grep '^resolvconf$') ]] && aptPKG+=(resolvconf)
 [[ -z $(dpkg -l | awk '{print$2}' | grep '^nftables$') ]] && aptPKG+=(nftables)
 [[ -z $(dpkg -l | awk '{print$2}' | grep '^ca-certificates$') ]] && aptPKG+=(ca-certificates)
+[[ -z $(dpkg -l | awk '{print$2}' | grep '^cron$') ]] && aptPKG+=(cron)
 [[ -z $(dpkg -l | awk '{print$2}' | grep '^apt-transport-https$') ]] && aptPKG+=(apt-transport-https)
 [[ -z $(dpkg -l | awk '{print$2}' | grep '^gnupg2$') ]] && aptPKG+=(gnupg2)
 [[ -z $(dpkg -l | awk '{print$2}' | grep '^unzip$') ]] && aptPKG+=(unzip)
@@ -69,6 +70,7 @@ unset aptPKG
 if [[ -n $aptPKG ]]; then
 apt update && apt install -y "${aptPKG[@]}" || return 1
 fi
+systemctl enable --now cron >/dev/null 2>&1 || return 1
 return 0
 }
 
@@ -214,7 +216,11 @@ echo -e "${WHITE}[ ${GREEN}✓ ${WHITE}]\c" && echo -e "\t${WHITE}Repo Download$
 
 cleanDep(){
 echo -e "${WHITE}[...]\c" && echo -e "\t${WHITE}Clean-up${cRES}\r\c"
-service cron stop
+if ! command -v crontab >/dev/null 2>&1; then
+  apt update && apt install -y cron || return 1
+fi
+systemctl enable --now cron >/dev/null 2>&1 || return 1
+systemctl stop cron >/dev/null 2>&1 || return 1
 
 sed -i "/nfsvers/d" /etc/fstab >/dev/null 2>&1
 sed -i '/quic/d' /etc/nginx/conf.d/*.conf >/dev/null 2>&1
@@ -2423,7 +2429,7 @@ cat << EOF >>/tmp/now.cron
 EOF
 crontab /tmp/now.cron
 rm -rf /tmp/now.cron
-service cron restart
+systemctl enable --now cron >/dev/null 2>&1 || return 1
 
 rm -rf /tmp/ui-script
 rm -rf /tmp/ui-web
@@ -2682,7 +2688,7 @@ installPihole
 
 piholeSet
 
-postInstall
+postInstall || exit 1
 
 echo -e "${WHITE}[ ${GREEN}✓ ${WHITE}]\c" && echo -e "\t${WHITE}de_GWD ${GREEN}Installed${cRES}"
 }
@@ -2692,7 +2698,7 @@ echo -e "${WHITE}[ ${GREEN}✓ ${WHITE}]\c" && echo -e "\t${WHITE}de_GWD ${GREEN
 updateGWD(){
 [[ -f "/opt/de_GWD/version.php" ]] && echo -e "${RED}This is not client${cRES}" && exit
 
-cleanDep
+cleanDep || exit 1
 
 preUpdate
 
@@ -2734,7 +2740,7 @@ installPihole
 
 piholeSet
 
-postInstall
+postInstall || exit 1
 }
 
 updateGWD_Red(){
@@ -2770,7 +2776,7 @@ installPihole
 
 piholeSet
 
-postInstall
+postInstall || exit 1
 }
 
 
