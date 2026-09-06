@@ -75,13 +75,17 @@ return 0
 }
 
 pkgDEP2(){
-install -d -m 0755 /etc/apt/keyrings || return 1
-if ! curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors -o /etc/apt/keyrings/docker.asc https://download.docker.com/linux/debian/gpg || [[ ! -s /etc/apt/keyrings/docker.asc ]]; then
+local dockerKey=/usr/share/keyrings/docker-ce-archive-keyring.gpg
+local dockerKeyTmp
+dockerKeyTmp=$(mktemp) || return 1
+if ! curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors -o "$dockerKeyTmp" https://download.docker.com/linux/debian/gpg || ! gpg --dearmor --yes -o "$dockerKey" "$dockerKeyTmp" || [[ ! -s "$dockerKey" ]]; then
+rm -f "$dockerKeyTmp"
 echo -e "${WHITE}Docker apt key${RED} Download Failed${cRES}"
 return 1
 fi
-chmod 0644 /etc/apt/keyrings/docker.asc || return 1
-echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian $(cat /etc/os-release | grep VERSION= | cut -d'(' -f2 | cut -d')' -f1) stable" >/etc/apt/sources.list.d/docker.list
+rm -f "$dockerKeyTmp"
+chmod 0644 "$dockerKey" || return 1
+echo "deb [arch=$(dpkg --print-architecture) signed-by=$dockerKey] https://download.docker.com/linux/debian $(cat /etc/os-release | grep VERSION= | cut -d'(' -f2 | cut -d')' -f1) stable" >/etc/apt/sources.list.d/docker.list
 
 
 unset aptPKG
@@ -456,36 +460,32 @@ try_connect() {
     local attempts=3
     local timeout=3
     local attempt=1
-    local response
 
     while [ $attempt -le $attempts ]; do
-        echo "Attempt $attempt to connect to $url"
-        response=$(curl -Is -m $timeout "$url")
-        if [ $? -eq 0 ]; then
-            echo "Successfully connected to $url"
-            echo "$response"
+        if curl -IsS --connect-timeout "$timeout" --max-time "$timeout" "$url" >/dev/null 2>&1; then
             return 0
-        else
-            echo "Failed to connect to $url"
-            ((attempt++))
-            [ $attempt -le $attempts ] && sleep 1
         fi
+        ((attempt++))
+        [ $attempt -le $attempts ] && sleep 1
     done
-    echo "Failed to connect to $url after $attempts attempts"
     return 1
 }
 
 # Execute connections
-serverConnect1=$(try_connect "google.com")
-serverConnect2=$(try_connect "1.1.1.1")
+try_connect "example.com"
+serverConnect1=$?
+try_connect "1.1.1.1"
+serverConnect2=$?
 
 if [[ $1 = "u" ]]; then
     if [[ $2 = "a" ]]; then
-        preDL
-        updateGWD_Green
-        [[ -z $serverConnect1 ]] || [[ -z $serverConnect2 ]] && exit
+        if [[ $serverConnect1 -ne 0 ]] || [[ $serverConnect2 -ne 0 ]]; then
+            return 1
+        fi
+        preDL || return 1
+        updateGWD_Green || return 1
     else
-        if [[ -n $serverConnect1 ]] && [[ -n $serverConnect2 ]] && [[ $(systemctl is-active 'vtrui') = "active" ]]; then
+        if [[ $serverConnect1 -eq 0 ]] && [[ $serverConnect2 -eq 0 ]] && [[ $(systemctl is-active 'vtrui') = "active" ]]; then
         echo -e "${WHITE}de_GWD server connect  ${cRES}\c" && echo -e "\t${WHITE}[${GREEN} ✓ ${WHITE}]${cRES}"
         de_GWDconnect_check="OK"
             echo -e "${GREEN}================================= ${cRES}"
@@ -507,26 +507,17 @@ if [[ $1 = "u" ]]; then
         fi
     fi
 else
-    if [[ -n $serverConnect1 ]] && [[ -n $serverConnect2 ]] && [[ $(systemctl is-active 'vtrui') = "active" ]]; then
+    if [[ $serverConnect1 -eq 0 ]] && [[ $serverConnect2 -eq 0 ]] && [[ $(systemctl is-active 'vtrui') = "active" ]]; then
         echo -e "${WHITE}[ ${GREEN}✓ ${WHITE}]\c" && echo -e "\t${WHITE}de_GWD server connect${cRES}"
     else
         echo -e "${WHITE}[ ${RED}✕ ${WHITE}]\c" && echo -e "\t${WHITE}de_GWD server connect${cRES}"
     fi
 
 
-if [[ -z $serverConnect1 ]] || [[ -z $serverConnect2 ]]; then
+if [[ $serverConnect1 -ne 0 ]] || [[ $serverConnect2 -ne 0 ]] || [[ $(systemctl is-active 'vtrui') != "active" ]]; then
 serverStatus
-echo -e "\t${RED}Failed! Stop mosdns smartdns nftables.${cRES}"
-cat << EOF >/etc/resolv.conf
-nameserver 119.29.29.29
-nameserver 180.76.76.76
-nameserver 114.114.114.114
-nameserver 223.5.5.5
-EOF
-systemctl stop mosdns >/dev/null 2>&1
-systemctl stop smartdns >/dev/null 2>&1
-systemctl stop nftables >/dev/null 2>&1
-exit
+echo -e "\t${YELLOW}Connection check failed; services kept running.${cRES}"
+return 1
 fi
 fi
 }
@@ -2449,53 +2440,6 @@ bash <(wget --show-progress -cqO- https://raw.githubusercontent.com/jacyl4/de_GW
 
 
 
-installZabblyKernel(){
-echo -e "${WHITE}[...]\c" && echo -e "\t${WHITE}Zabbly kernel${cRES}\r\c"
-mkdir -p /etc/apt/keyrings
-if ! wget -qO /etc/apt/keyrings/zabbly.asc https://pkgs.zabbly.com/key.asc; then
-  echo -e "${WHITE}[ ${RED}✕ ${WHITE}]\c" && echo -e "\t${WHITE}Zabbly key ${RED}Download Failed${cRES}"
-  return 1
-fi
-cat << EOF >/etc/apt/sources.list.d/zabbly-kernel.sources
-Enabled: yes
-Types: deb
-URIs: https://pkgs.zabbly.com/kernel/stable
-Suites: $(. /etc/os-release && echo "$VERSION_CODENAME")
-Components: main
-Architectures: $architecture
-Signed-By: /etc/apt/keyrings/zabbly.asc
-EOF
-if ! apt-get update || ! apt-get install -y linux-zabbly; then
-  echo -e "${WHITE}[ ${RED}✕ ${WHITE}]\c" && echo -e "\t${WHITE}Zabbly kernel ${RED}Install Failed${cRES}"
-  return 1
-fi
-if ! dpkg -l | awk '$1 == "ii" && $2 ~ /^linux-image-.*zabbly/ {found=1} END {exit !found}'; then
-  echo -e "${WHITE}[ ${RED}✕ ${WHITE}]\c" && echo -e "\t${WHITE}Zabbly kernel ${RED}Install Failed${cRES}"
-  return 1
-fi
-echo -e "${WHITE}[ ${GREEN}✓ ${WHITE}]\c" && echo -e "\t${WHITE}Zabbly kernel${cRES}"
-}
-
-
-
-ensureZabblyKernel(){
-[[ $architecture != "amd64" ]] && return 0
-[[ $(uname -r) == *zabbly* ]] && return 0
-
-echo -e "${YELLOW}Zabbly kernel is required before installing de_GWD.${cRES}"
-if ! installZabblyKernel; then
-  return 1
-fi
-echo -e "${YELLOW}Rebooting to activate the Zabbly kernel. Run client again after reboot.${cRES}"
-if reboot; then
-  exit 0
-fi
-echo -e "${WHITE}[ ${RED}✕ ${WHITE}]\c" && echo -e "\t${WHITE}Zabbly kernel ${RED}Reboot Failed${cRES}"
-return 1
-}
-
-
-
 clearPihole(){
 rm -rf /opt/de_GWD/pihole/listsCache/*
 >/opt/de_GWD/pihole/adlists.list
@@ -2551,7 +2495,6 @@ echo -e "${WHITE}[ ${GREEN}✓ ${WHITE}]\c" && echo -e "\t${WHITE}Password ${GRE
 
 
 installGWD(){
-ensureZabblyKernel || exit 1
     echo -e "${GREEN}=========================== ${cRES}"
     echo -e "${GREEN} de_GWD local IP address${cRES}"
     echo -e "${GREEN}=========================== ${cRES}"
