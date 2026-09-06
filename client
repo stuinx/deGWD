@@ -27,6 +27,19 @@ elif [[ $architecture = "amd64" ]]; then
 chnAPTsource="mirrors.aliyun.com"
 fi
 
+waitAPT(){
+local timeout=180
+while pgrep -x apt >/dev/null 2>&1 || pgrep -x apt-get >/dev/null 2>&1 || pgrep -x dpkg >/dev/null 2>&1 || pgrep -x unattended-upgrade >/dev/null 2>&1; do
+  if (( timeout <= 0 )); then
+    echo -e "${WHITE}APT lock${RED} is still held${cRES}"
+    return 1
+  fi
+  sleep 1
+  ((timeout--))
+done
+return 0
+}
+
 pkgDEP1(){
 if [[ $architecture = "arm64" ]];then
 unset Freeze_Package
@@ -35,6 +48,7 @@ Freeze_Package+=($(dpkg -l | grep 'linux-image-' | awk '{print $2}'))
 Freeze_Package+=($(dpkg -l | grep 'linux-headers-' | awk '{print $2}'))
 Freeze_Package+=($(dpkg -l | grep 'linux-dtb-' | awk '{print $2}'))
 echo ${Freeze_Package[@]} | xargs -n1 apt-mark hold
+waitAPT || return 1
 apt update && apt install -y apparmor apparmor-utils google-perftools || return 1
 fi
 
@@ -68,6 +82,7 @@ unset aptPKG
 [[ -z $(dpkg -l | awk '{print$2}' | grep '^chrony$') ]] && aptPKG+=(chrony)
 [[ -z $(dpkg -l | awk '{print$2}' | grep '^irqbalance$') ]] && [[ $(nproc --all) -gt 1 ]] && aptPKG+=(irqbalance)
 if [[ -n $aptPKG ]]; then
+waitAPT || return 1
 apt update && apt install -y "${aptPKG[@]}" || return 1
 fi
 systemctl enable --now cron >/dev/null 2>&1 || return 1
@@ -107,6 +122,7 @@ unset aptPKG
 [[ -z $(dpkg -l | awk '{print$2}' | grep '^sqlite3$') ]] && aptPKG+=(sqlite3)
 [[ -z $(dpkg -l | awk '{print$2}' | grep '^libmimalloc2.0') ]] && aptPKG+=(libmimalloc2.0)
 if [[ -n $aptPKG ]]; then
+waitAPT || return 1
 apt update && apt install -y "${aptPKG[@]}" || return 1
 fi
 return 0
@@ -221,6 +237,7 @@ echo -e "${WHITE}[ ${GREEN}✓ ${WHITE}]\c" && echo -e "\t${WHITE}Repo Download$
 cleanDep(){
 echo -e "${WHITE}[...]\c" && echo -e "\t${WHITE}Clean-up${cRES}\r\c"
 if ! command -v crontab >/dev/null 2>&1; then
+  waitAPT || return 1
   apt update && apt install -y cron || return 1
 fi
 systemctl enable --now cron >/dev/null 2>&1 || return 1
@@ -1437,7 +1454,7 @@ EOF
 chmod +x /opt/de_GWD/nftables/SET_V2NODE.nft
 /opt/de_GWD/nftables/SET_V2NODE.nft
 
-if [[ $(du -sk /opt/de_GWD/.repo/IPchnroute 2>/dev/null | awk '{print$1}') -gt 100 ]]; then
+if [[ $(du -sk /opt/de_GWD/.repo/IPchnroute 2>/dev/null | awk '{print$1}') -ge 100 ]]; then
 cp -f /opt/de_GWD/.repo/IPchnroute /opt/de_GWD/nftables/IP_CHNROUTE
 sed -i '/^\s*$/d' /opt/de_GWD/nftables/IP_CHNROUTE
 sed -i 's/$/,/g' /opt/de_GWD/nftables/IP_CHNROUTE
@@ -1781,6 +1798,7 @@ echo -e "${WHITE}PHP apt key${RED} Download Failed${cRES}"
 return 1
 fi
 
+waitAPT || return 1
 if ! apt update --fix-missing ||
    ! apt upgrade --allow-downgrades -y ||
    ! apt full-upgrade -y ||
@@ -2215,7 +2233,20 @@ cp -f /opt/de_GWD/.repo/version.php /var/www/html/act/version.php
 
 pullpihole(){
 echo -e "${WHITE}[...]\c" && echo -e "\t${WHITE}Install Pi-hole${cRES}\r\c"
-docker pull pihole/pihole:latest
+systemctl stop nftables vtrui >/dev/null 2>&1
+if docker image inspect pihole/pihole:latest >/dev/null 2>&1; then
+  systemctl start nftables >/dev/null 2>&1
+  return 0
+fi
+if docker pull pihole/pihole:latest || \
+   { docker pull mps.rxm.xyz/pihole/pihole:latest &&
+     docker tag mps.rxm.xyz/pihole/pihole:latest pihole/pihole:latest; }; then
+  systemctl start nftables >/dev/null 2>&1
+  return 0
+fi
+systemctl start nftables >/dev/null 2>&1
+echo -e "${WHITE}Pi-hole image${RED} Download Failed${cRES}"
+return 1
 }
 
 
@@ -2250,9 +2281,14 @@ docker run -d \
 -v /etc/localtime:/etc/localtime \
 -v /opt/de_GWD/pihole:/etc/pihole \
 -v /etc/dnsmasq.d:/etc/dnsmasq.d \
-pihole/pihole:latest
+pihole/pihole:latest || return 1
 
-python3 <<EOF
+if [[ $(docker inspect -f '{{.State.Running}}' pihole 2>/dev/null) != "true" ]]; then
+  echo -e "${WHITE}Pi-hole${RED} Start Failed${cRES}"
+  return 1
+fi
+
+if ! python3 <<EOF
 import toml
 with open("/opt/de_GWD/pihole/pihole.toml", "r") as f:
  data = toml.load(f)
@@ -2262,6 +2298,9 @@ data['webserver']['api']['pwhash'] = "$piholePW"
 with open("/opt/de_GWD/pihole/pihole.toml", "w") as f:
     toml.dump(data, f)
 EOF
+then
+  return 1
+fi
 }
 
 
@@ -2273,7 +2312,7 @@ systemctl daemon-reload >/dev/null
 
 update-rc.d -f dhcpd remove >/dev/null 2>&1
 
-python3 <<EOF
+if ! python3 <<EOF
 import toml
 with open("/opt/de_GWD/pihole/pihole.toml", "r") as f:
  data = toml.load(f)
@@ -2302,6 +2341,9 @@ data["misc"]["check"]["load"] = False
 with open("/opt/de_GWD/pihole/pihole.toml", "w") as f:
     toml.dump(data, f)
 EOF
+then
+  return 1
+fi
 
 chmod -R 777 /opt/de_GWD/pihole
 
@@ -2319,9 +2361,30 @@ echo -e "${WHITE}[ ${GREEN}✓ ${WHITE}]\c" && echo -e "\t${WHITE}Pi-hole Config
 
 
 
+verifyRuntimeResources(){
+local missing=0
+for resource in geoip.dat geosite.dat Domains.chn.txt; do
+  if [[ ! -s "/opt/de_GWD/.repo/$resource" ]]; then
+    echo -e "${WHITE}Runtime resource${RED} missing: $resource${cRES}"
+    missing=1
+  fi
+done
+
+if [[ -s /opt/de_GWD/.repo/geoip.dat ]]; then
+  cp -f /opt/de_GWD/.repo/geoip.dat /opt/de_GWD/vtrui/geoip.dat || missing=1
+fi
+if [[ -s /opt/de_GWD/.repo/geosite.dat ]]; then
+  cp -f /opt/de_GWD/.repo/geosite.dat /opt/de_GWD/vtrui/geosite.dat || missing=1
+fi
+
+return "$missing"
+}
+
+
 postInstall(){
 /opt/de_GWD/ui-NodeOne
 /opt/de_GWD/ui_4am
+verifyRuntimeResources || return 1
 /opt/de_GWD/ui_4h
 systemctl restart smartdns
 systemctl restart mosdns
@@ -2421,6 +2484,17 @@ EOF
 crontab /tmp/now.cron
 rm -rf /tmp/now.cron
 systemctl enable --now cron >/dev/null 2>&1 || return 1
+
+for service in smartdns mosdns vtrui nftables nginx php7.4-fpm; do
+  if ! systemctl is-active --quiet "$service"; then
+    echo -e "${WHITE}Service${RED} failed: $service${cRES}"
+    return 1
+  fi
+done
+if [[ $(docker inspect -f '{{.State.Running}}' pihole 2>/dev/null) != "true" ]]; then
+  echo -e "${WHITE}Pi-hole${RED} is not running${cRES}"
+  return 1
+fi
 
 rm -rf /tmp/ui-script
 rm -rf /tmp/ui-web
@@ -2625,11 +2699,11 @@ nginxSet
 
 installWebUI
 
-pullpihole
+pullpihole || exit 1
 
-installPihole
+installPihole || exit 1
 
-piholeSet
+piholeSet || exit 1
 
 postInstall || exit 1
 
@@ -2794,7 +2868,7 @@ else
   echo -e "${WHITE} GeoIP          \c" && echo -e "${WHITE}[ ${RED}✕ ${WHITE}]${cRES}"
 fi
 
-if [[ $(du -sk /opt/de_GWD/nftables/IP_CHNROUTE 2>/dev/null | awk '{print$1}') -gt 100 ]]; then
+if [[ $(du -sk /opt/de_GWD/nftables/IP_CHNROUTE 2>/dev/null | awk '{print$1}') -ge 100 ]]; then
   echo -e "${WHITE} ChnrouteIP     \c" && echo -e "${WHITE}[ ${GREEN}✓ ${WHITE}]${cRES}"
 else
   echo -e "${WHITE} ChnrouteIP     \c" && echo -e "${WHITE}[ ${RED}✕ ${WHITE}]${cRES}"
