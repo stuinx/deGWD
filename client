@@ -35,7 +35,7 @@ Freeze_Package+=($(dpkg -l | grep 'linux-image-' | awk '{print $2}'))
 Freeze_Package+=($(dpkg -l | grep 'linux-headers-' | awk '{print $2}'))
 Freeze_Package+=($(dpkg -l | grep 'linux-dtb-' | awk '{print $2}'))
 echo ${Freeze_Package[@]} | xargs -n1 apt-mark hold
-apt update && apt install apparmor apparmor-utils google-perftools
+apt update && apt install -y apparmor apparmor-utils google-perftools || return 1
 fi
 
 [[ -n $(dpkg -l | awk '{print$2}' | grep '^ipset$') ]] && apt remove --purge ipset
@@ -66,12 +66,20 @@ unset aptPKG
 [[ -z $(dpkg -l | awk '{print$2}' | grep '^rng-tools-debian$') ]] && aptPKG+=(rng-tools-debian)
 [[ -z $(dpkg -l | awk '{print$2}' | grep '^chrony$') ]] && aptPKG+=(chrony)
 [[ -z $(dpkg -l | awk '{print$2}' | grep '^irqbalance$') ]] && [[ $(nproc --all) -gt 1 ]] && aptPKG+=(irqbalance)
-[[ -n $aptPKG ]] && apt update && apt install $(echo ${aptPKG[@]})
+if [[ -n $aptPKG ]]; then
+apt update && apt install -y "${aptPKG[@]}" || return 1
+fi
+return 0
 }
 
 pkgDEP2(){
-curl -fsSL https://download.docker.com/linux/debian/gpg | install -m 0644 -D /dev/stdin /usr/share/keyrings/docker-archive-keyring.gpg
-echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/debian $(cat /etc/os-release | grep VERSION= | cut -d'(' -f2 | cut -d')' -f1) stable" >/etc/apt/sources.list.d/docker.list
+install -d -m 0755 /etc/apt/keyrings || return 1
+if ! curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors -o /etc/apt/keyrings/docker.asc https://download.docker.com/linux/debian/gpg || [[ ! -s /etc/apt/keyrings/docker.asc ]]; then
+echo -e "${WHITE}Docker apt key${RED} Download Failed${cRES}"
+return 1
+fi
+chmod 0644 /etc/apt/keyrings/docker.asc || return 1
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian $(cat /etc/os-release | grep VERSION= | cut -d'(' -f2 | cut -d')' -f1) stable" >/etc/apt/sources.list.d/docker.list
 
 
 unset aptPKG
@@ -92,7 +100,10 @@ unset aptPKG
 [[ -z $(dpkg -l | awk '{print$2}' | grep '^php7.4-json$') ]] && aptPKG+=(php7.4-json)
 [[ -z $(dpkg -l | awk '{print$2}' | grep '^sqlite3$') ]] && aptPKG+=(sqlite3)
 [[ -z $(dpkg -l | awk '{print$2}' | grep '^libmimalloc2.0') ]] && aptPKG+=(libmimalloc2.0)
-[[ -n $aptPKG ]] && apt update && apt install $(echo ${aptPKG[@]})
+if [[ -n $aptPKG ]]; then
+apt update && apt install -y "${aptPKG[@]}" || return 1
+fi
+return 0
 }
 
 checkSum(){
@@ -102,6 +113,12 @@ if [[ $sha256sumL = $2 ]]; then
 elif [[ $sha256sumL != $2 ]]; then
   echo "false"
 fi
+}
+
+repoGet(){
+local repoURL=$1
+curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors --connect-timeout 10 --max-time 30 "$repoURL" || \
+curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors --connect-timeout 10 --max-time 30 "https://ghproxy.net/$repoURL"
 }
 
 
@@ -149,43 +166,43 @@ chmod +x /opt/de_GWD/tcpTime
 
 repoDL(){
 echo -e "${WHITE}[...]\c" && echo -e "\t${WHITE}Repo Download${cRES}\r\c"
-sha256sum_nginx=$(curl -fsSLo- https://raw.githubusercontent.com/jacyl4/de_GWD/$branch/resource/nginx/nginx_"$architecture".sha256sum)
-sha256sum_nginxConf=$(curl -fsSLo- https://raw.githubusercontent.com/jacyl4/de_GWD/$branch/resource/nginx/nginxConf.zip.sha256sum)
-sha256sum_client=$(curl -fsSLo- https://raw.githubusercontent.com/jacyl4/de_GWD/$branch/resource/client/Archive.zip.sha256sum)
+sha256sum_nginx=$(repoGet https://raw.githubusercontent.com/jacyl4/de_GWD/$branch/resource/nginx/nginx_"$architecture".sha256sum)
+sha256sum_nginxConf=$(repoGet https://raw.githubusercontent.com/jacyl4/de_GWD/$branch/resource/nginx/nginxConf.zip.sha256sum)
+sha256sum_client=$(repoGet https://raw.githubusercontent.com/jacyl4/de_GWD/$branch/resource/client/Archive.zip.sha256sum)
 
 if [[ $(checkSum /usr/sbin/nginx $sha256sum_nginx) = "false" ]]; then
 rm -rf /tmp/nginx
-wget --show-progress -cqO /tmp/nginx https://raw.githubusercontent.com/jacyl4/de_GWD/$branch/resource/nginx/nginx_"$architecture"
+repoGet https://raw.githubusercontent.com/jacyl4/de_GWD/$branch/resource/nginx/nginx_"$architecture" >/tmp/nginx
 [[ $(checkSum /tmp/nginx $sha256sum_nginx) = "false" ]] && echo -e "${WHITE}NGINX Core${RED} Download Failed${cRES}" && exit
 [[ $(checkSum /tmp/nginx $sha256sum_nginx) = "true" ]] && mv -f /tmp/nginx /usr/sbin/nginx && chmod +x /usr/sbin/nginx
 fi
 
 if [[ $(checkSum /opt/de_GWD/.repo/nginxConf.zip $sha256sum_nginxConf) = "false" ]]; then
 rm -rf /tmp/nginxConf.zip
-wget --show-progress -cqO /tmp/nginxConf.zip https://raw.githubusercontent.com/jacyl4/de_GWD/$branch/resource/nginx/nginxConf.zip
+repoGet https://raw.githubusercontent.com/jacyl4/de_GWD/$branch/resource/nginx/nginxConf.zip >/tmp/nginxConf.zip
 [[ $(checkSum /tmp/nginxConf.zip $sha256sum_nginxConf) = "false" ]] && echo -e "${RED}Download Failed${cRES}" && exit
 [[ $(checkSum /tmp/nginxConf.zip $sha256sum_nginxConf) = "true" ]] && mv -f /tmp/nginxConf.zip /opt/de_GWD/.repo/nginxConf.zip
 fi
 
 if [[ $(ttyd -v 2>&1 | grep -o '[0-9]\.[0-9]\.[0-9]') != $TTYD_Ver ]]; then
-wget --show-progress -cqO /tmp/ttyd https://github.com/tsl0922/ttyd/releases/download/$TTYD_Ver/ttyd.$(uname -m)
+repoGet https://github.com/tsl0922/ttyd/releases/download/$TTYD_Ver/ttyd.$(uname -m) >/tmp/ttyd
 [[ $? -ne 0 ]] && echo -e "${WHITE}TTYD${RED} Download Failed${cRES}"
 [[ $(du -sk /tmp/ttyd 2>/dev/null | awk '{print$1}') -gt 1000 ]] && mv -f /tmp/ttyd /usr/bin/ttyd && chmod +x /usr/bin/ttyd && TTYD_UPDATE="true"
 fi
 
 if [[ $(checkSum /opt/de_GWD/.repo/client.zip $sha256sum_client) = "false" ]]; then
 rm -rf /tmp/client.zip
-wget --show-progress -cqO /tmp/client.zip https://raw.githubusercontent.com/jacyl4/de_GWD/$branch/resource/client/Archive.zip
+repoGet https://raw.githubusercontent.com/jacyl4/de_GWD/$branch/resource/client/Archive.zip >/tmp/client.zip
 [[ $(checkSum /tmp/client.zip $sha256sum_client) = "false" ]] && echo -e "${WHITE}Client Zip${RED} Download Failed${cRES}" && exit
 [[ $(checkSum /tmp/client.zip $sha256sum_client) = "true" ]] && mv -f /tmp/client.zip /opt/de_GWD/.repo/client.zip
 fi
 
 localVer=$(awk 'NR==1' /opt/de_GWD/.repo/version.php 2>/dev/null)
-remoteVer=$(curl -fsSLo- https://raw.githubusercontent.com/jacyl4/de_GWD/main/version.php | head -n 1)
+remoteVer=$(repoGet https://raw.githubusercontent.com/jacyl4/de_GWD/main/version.php | head -n 1)
 
 if [[ $localVer != $remoteVer ]] || [[ ! -f '/opt/de_GWD/.repo/version.php' ]]; then
 rm -rf /opt/de_GWD/.repo/version.php
-wget --show-progress -cqO /opt/de_GWD/.repo/version.php https://raw.githubusercontent.com/jacyl4/de_GWD/main/version.php
+repoGet https://raw.githubusercontent.com/jacyl4/de_GWD/main/version.php >/opt/de_GWD/.repo/version.php
 [[ $? -ne 0 ]] && echo -e "${WHITE}Version file${RED} Download Failed${cRES}" && exit
 fi
 
@@ -473,7 +490,7 @@ if [[ $1 = "u" ]]; then
 
             if [[ $updateDebian = "Y" ]] || [[ $updateDebian = "y" ]]; then
             preDL
-            updateAPT
+            updateAPT || exit 1
             fi
             preDL
             updateGWD_Green
@@ -622,7 +639,7 @@ rm -f /var/lib/dpkg/lock
 rm -f /var/lib/dpkg/lock-frontend
 dpkg --configure -a
 
-pkgDEP1
+pkgDEP1 || exit 1
 
 cat << EOF >/etc/default/rng-tools-debian
 # -*- mode: sh -*-
@@ -1760,11 +1777,21 @@ EOF
 
 echo "deb [signed-by=/etc/apt/keyrings/deb.sury.org.gpg] https://packages.sury.org/php/ $(cat /etc/os-release | grep VERSION= | cut -d'(' -f2 | cut -d')' -f1) main" >/etc/apt/sources.list.d/php.list
 apt-key del 95BD4743 >/dev/null 2>&1
-curl -sSLo /etc/apt/keyrings/deb.sury.org.gpg https://packages.sury.org/php/apt.gpg
-[[ $? -ne 0 ]] && echo -e "${WHITE}PHP apt key${RED} Download Failed${cRES}"
+install -d -m 0755 /etc/apt/keyrings || return 1
+if ! curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors -o /etc/apt/keyrings/deb.sury.org.gpg https://packages.sury.org/php/apt.gpg || [[ ! -s /etc/apt/keyrings/deb.sury.org.gpg ]]; then
+echo -e "${WHITE}PHP apt key${RED} Download Failed${cRES}"
+return 1
+fi
 
-apt update --fix-missing && apt upgrade --allow-downgrades -y
-apt full-upgrade -y && apt autoremove --purge -y && apt clean -y && apt autoclean -y
+if ! apt update --fix-missing ||
+   ! apt upgrade --allow-downgrades -y ||
+   ! apt full-upgrade -y ||
+   ! apt autoremove --purge -y ||
+   ! apt clean -y ||
+   ! apt autoclean -y; then
+echo -e "${WHITE}Debian ${RED}Update Failed${cRES}"
+return 1
+fi
 
 echo -e "${WHITE}[ ${GREEN}✓ ${WHITE}]\c" && echo -e "\t${WHITE}Debian ${GREEN}Updated${cRES}"
 }
@@ -1776,9 +1803,9 @@ echo -e "${WHITE}[...]\c" && echo -e "\t${WHITE}Dependencies${cRES}\r\c"
 sed -i "/www-data/d" /etc/sudoers
 sed -i "/Allow members of group sudo to execute any command/a\www-data ALL=(root)  NOPASSWD:ALL" /etc/sudoers
 
-pkgDEP1
+pkgDEP1 || return 1
 
-pkgDEP2
+pkgDEP2 || return 1
 
 DPKGclean=$(dpkg --list | grep "^rc" | cut -d " " -f 3)
 [[ -n $DPKGclean ]] && echo $DPKGclean | xargs sudo dpkg --purge
@@ -2603,6 +2630,14 @@ preConf
 
 preDL
 
+updateAPT || exit 1
+
+apt --reinstall install -y ca-certificates || exit 1
+
+installDep || exit 1
+
+repoDL
+
 installSmartDNS
 
 installXray
@@ -2633,14 +2668,6 @@ jq --arg path "$path" '.update.v2node.path=$path' | sponge /opt/de_GWD/0conf
 chmod 666 /opt/de_GWD/0conf
 
 de_GWDconnect
-
-updateAPT
-
-apt --reinstall install ca-certificates
-
-installDep
-
-repoDL
 
 installNginx
 
@@ -2682,7 +2709,7 @@ echo -e "${WHITE}[ ${GREEN}✓ ${WHITE}]\c" && echo -e "\t${WHITE}de_GWD ${GREEN
 updateGWD_Green(){
 repoDL
 
-installDep
+installDep || exit 1
 
 installNginx
 
@@ -2716,6 +2743,12 @@ preConf
 
 preDL
 
+updateAPT || exit 1
+
+installDep || exit 1
+
+repoDL
+
 installSmartDNS
 
 installXray
@@ -2723,12 +2756,6 @@ installXray
 installNftables
 
 de_GWDconnect
-
-updateAPT
-
-installDep
-
-repoDL
 
 installNginx
 

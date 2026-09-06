@@ -58,7 +58,10 @@ unset aptPKG
 [[ -z $(dpkg -l | awk '{print$2}' | grep '^unbound$') ]] && aptPKG+=(unbound)
 [[ -z $(dpkg -l | awk '{print$2}' | grep '^libmimalloc2.0') ]] && aptPKG+=(libmimalloc2.0)
 [[ -z $(dpkg -l | awk '{print$2}' | grep '^irqbalance$') ]] && [[ $(nproc --all) -gt 1 ]] && aptPKG+=(irqbalance)
-[[ -n $aptPKG ]] && apt update && apt install $(echo ${aptPKG[@]})
+if [[ -n $aptPKG ]]; then
+apt update && apt install -y "${aptPKG[@]}" || return 1
+fi
+return 0
 }
 
 
@@ -347,7 +350,7 @@ EOF
 apt update --fix-missing && apt upgrade --allow-downgrades -y
 apt full-upgrade -y && apt autoremove --purge -y && apt clean -y && apt autoclean -y
 
-pkgDEP
+pkgDEP || exit 1
 
 cat << EOF >/etc/default/rng-tools-debian
 # -*- mode: sh -*-
