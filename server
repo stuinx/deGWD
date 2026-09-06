@@ -1535,6 +1535,53 @@ bash <(wget --show-progress -cqO- https://raw.githubusercontent.com/jacyl4/de_GW
 
 
 
+installZabblyKernel(){
+echo -e "${WHITE}[...]\c" && echo -e "\t${WHITE}Zabbly kernel${cRES}\r\c"
+mkdir -p /etc/apt/keyrings
+if ! wget -qO /etc/apt/keyrings/zabbly.asc https://pkgs.zabbly.com/key.asc; then
+  echo -e "${WHITE}[ ${RED}✕ ${WHITE}]\c" && echo -e "\t${WHITE}Zabbly key ${RED}Download Failed${cRES}"
+  return 1
+fi
+cat << EOF >/etc/apt/sources.list.d/zabbly-kernel.sources
+Enabled: yes
+Types: deb
+URIs: https://pkgs.zabbly.com/kernel/stable
+Suites: $(. /etc/os-release && echo "$VERSION_CODENAME")
+Components: main
+Architectures: $architecture
+Signed-By: /etc/apt/keyrings/zabbly.asc
+EOF
+if ! apt-get update || ! apt-get install -y linux-zabbly; then
+  echo -e "${WHITE}[ ${RED}✕ ${WHITE}]\c" && echo -e "\t${WHITE}Zabbly kernel ${RED}Install Failed${cRES}"
+  return 1
+fi
+if ! dpkg -l | awk '$1 == "ii" && $2 ~ /^linux-image-.*zabbly/ {found=1} END {exit !found}'; then
+  echo -e "${WHITE}[ ${RED}✕ ${WHITE}]\c" && echo -e "\t${WHITE}Zabbly kernel ${RED}Install Failed${cRES}"
+  return 1
+fi
+echo -e "${WHITE}[ ${GREEN}✓ ${WHITE}]\c" && echo -e "\t${WHITE}Zabbly kernel${cRES}"
+}
+
+
+
+ensureZabblyKernel(){
+[[ $architecture != "amd64" ]] && return 0
+[[ $(uname -r) == *zabbly* ]] && return 0
+
+echo -e "${YELLOW}Zabbly kernel is required before installing de_GWD.${cRES}"
+if ! installZabblyKernel; then
+  return 1
+fi
+echo -e "${YELLOW}Rebooting to activate the Zabbly kernel. Run server again after reboot.${cRES}"
+if reboot; then
+  exit 0
+fi
+echo -e "${WHITE}[ ${RED}✕ ${WHITE}]\c" && echo -e "\t${WHITE}Zabbly kernel ${RED}Reboot Failed${cRES}"
+return 1
+}
+
+
+
 changeDomain(){
     echo -e "${GREEN}================== ${cRES}"
     echo -e "${GREEN} Input new domain${cRES}"
@@ -1895,6 +1942,7 @@ echo -e "${BLUE}-------------------------------------------------- ${cRES}"
 
 
 installGWD(){
+ensureZabblyKernel || exit 1
     echo -e "${GREEN}================== ${cRES}"
     echo -e "${GREEN} Input VPS domain${cRES}"
     echo -e "${GREEN}================== ${cRES}"
