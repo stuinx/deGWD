@@ -8,8 +8,11 @@ rm -rf /opt/de_GWD/autoUpdate
 else
 cat << "EOF" >/opt/de_GWD/autoUpdate
 #!/bin/bash
+repoBase="${DE_GWD_REPO_BASE:-https://raw.githubusercontent.com/stuinx/deGWD}"
+repoBase="${repoBase%/}"
+branch="${DE_GWD_RESOURCE_BRANCH:-fix}"
 localVer=$(awk 'NR==1' /var/www/html/act/version.php)
-remoteVer=$(curl -fsSLo- https://raw.githubusercontent.com/jacyl4/de_GWD/main/version.php | head -n 1)
+remoteVer=$(curl -fsSLo- "${repoBase}/${branch}/version.php" | head -n 1)
 
 echo $localVer >/tmp/de_GWD_Ver
 echo $remoteVer >>/tmp/de_GWD_Ver
@@ -20,7 +23,7 @@ if [[ $VerCP = $localVer ]]; then
 systemctl stop php7.4-fpm
 
 rm -rf /tmp/autoUpdate
-wget -cqO /tmp/autoUpdate https://raw.githubusercontent.com/jacyl4/de_GWD/main/client
+wget -cqO /tmp/autoUpdate "${repoBase}/${branch}/client"
 
 if [[ $(du -sk /tmp/autoUpdate 2>/dev/null | awk '{print$1}') -gt 70 ]]; then
 sed -i '$d' /tmp/autoUpdate

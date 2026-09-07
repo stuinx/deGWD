@@ -13,7 +13,9 @@ chmod 777 /tmp
 architecture=$(dpkg --print-architecture)
 [[ "openvz lxc lxc-libvirt systemd-nspawn docker podman proot pouch" =~ $(systemd-detect-virt) ]] && virt_type="container"
 export DEBIAN_FRONTEND=noninteractive
-branch="main"
+repoBase="${DE_GWD_REPO_BASE:-https://raw.githubusercontent.com/stuinx/deGWD}"
+repoBase="${repoBase%/}"
+branch="${DE_GWD_RESOURCE_BRANCH:-fix}"
 
 [[ -f "/etc/nginx/conf.d/default.conf" ]] && sed -i 's/fastopen=128/fastopen=500/g' /etc/nginx/conf.d/default.conf
 
@@ -81,53 +83,53 @@ fi
 
 repoDL(){
 echo -e "${WHITE}[...]\c" && echo -e "\t${WHITE}Repository${cRES}\r\c"
-sha256sum_de_GWD=$(curl -fsSLo- https://raw.githubusercontent.com/jacyl4/de_GWD/$branch/de_GWD_"$architecture".zip.sha256sum)
-sha256sum_don_server=$(curl -fsSLo- https://raw.githubusercontent.com/jacyl4/de_GWD/$branch/resource/doh/doh_s_"$architecture".sha256sum)
-sha256sum_nginx=$(curl -fsSLo- https://raw.githubusercontent.com/jacyl4/de_GWD/$branch/resource/nginx/nginx_"$architecture".sha256sum)
-sha256sum_nginxConf=$(curl -fsSLo- https://raw.githubusercontent.com/jacyl4/de_GWD/$branch/resource/nginx/nginxConf.zip.sha256sum)
-sha256sum_sample=$(curl -fsSLo- https://raw.githubusercontent.com/jacyl4/de_GWD/$branch/resource/server/sample.zip.sha256sum)
+sha256sum_de_GWD=$(curl -fsSLo- "${repoBase}/${branch}/de_GWD_${architecture}.zip.sha256sum")
+sha256sum_don_server=$(curl -fsSLo- "${repoBase}/${branch}/resource/doh/doh_s_${architecture}.sha256sum")
+sha256sum_nginx=$(curl -fsSLo- "${repoBase}/${branch}/resource/nginx/nginx_${architecture}.sha256sum")
+sha256sum_nginxConf=$(curl -fsSLo- "${repoBase}/${branch}/resource/nginx/nginxConf.zip.sha256sum")
+sha256sum_sample=$(curl -fsSLo- "${repoBase}/${branch}/resource/server/sample.zip.sha256sum")
 
 if [[ $(checkSum /opt/de_GWD/doh-server $sha256sum_don_server) = "false" ]]; then
 rm -rf /tmp/doh-server
-wget --show-progress -cqO /tmp/doh-server https://raw.githubusercontent.com/jacyl4/de_GWD/$branch/resource/doh/doh_s_$architecture
+wget --show-progress -cqO /tmp/doh-server "${repoBase}/${branch}/resource/doh/doh_s_${architecture}"
 [[ $(checkSum /tmp/doh-server $sha256sum_don_server) = "false" ]] && echo -e "${RED}Download Failed${cRES}" && exit
 [[ $(checkSum /tmp/doh-server $sha256sum_don_server) = "true" ]] && mv -f /tmp/doh-server /opt/de_GWD/doh-server && chmod +x /opt/de_GWD/doh-server
 fi
 
 if [[ $(checkSum /usr/sbin/nginx $sha256sum_nginx) = "false" ]]; then
 rm -rf /tmp/nginx
-wget --show-progress -cqO /tmp/nginx https://raw.githubusercontent.com/jacyl4/de_GWD/$branch/resource/nginx/nginx_"$architecture"
+wget --show-progress -cqO /tmp/nginx "${repoBase}/${branch}/resource/nginx/nginx_${architecture}"
 [[ $(checkSum /tmp/nginx $sha256sum_nginx) = "false" ]] && echo -e "${RED}Download Failed${cRES}" && exit
 [[ $(checkSum /tmp/nginx $sha256sum_nginx) = "true" ]] && mv -f /tmp/nginx /usr/sbin/nginx && chmod +x /usr/sbin/nginx
 fi
 
 if [[ $(checkSum /opt/de_GWD/.repo/de_GWD.zip $sha256sum_de_GWD) = "false" ]]; then
 rm -rf /tmp/de_GWD.zip
-wget --show-progress -cqO /tmp/de_GWD.zip https://raw.githubusercontent.com/jacyl4/de_GWD/$branch/de_GWD_"$architecture".zip
+wget --show-progress -cqO /tmp/de_GWD.zip "${repoBase}/${branch}/de_GWD_${architecture}.zip"
 [[ $(checkSum /tmp/de_GWD.zip $sha256sum_de_GWD) = "false" ]] && echo -e "${RED}Download Failed${cRES}" && exit
 [[ $(checkSum /tmp/de_GWD.zip $sha256sum_de_GWD) = "true" ]] && mv -f /tmp/de_GWD.zip /opt/de_GWD/.repo/de_GWD.zip
 fi
 
 if [[ $(checkSum /opt/de_GWD/.repo/nginxConf.zip $sha256sum_nginxConf) = "false" ]]; then
 rm -rf /tmp/nginxConf.zip
-wget --show-progress -cqO /tmp/nginxConf.zip https://raw.githubusercontent.com/jacyl4/de_GWD/$branch/resource/nginx/nginxConf.zip
+wget --show-progress -cqO /tmp/nginxConf.zip "${repoBase}/${branch}/resource/nginx/nginxConf.zip"
 [[ $(checkSum /tmp/nginxConf.zip $sha256sum_nginxConf) = "false" ]] && echo -e "${RED}Download Failed${cRES}" && exit
 [[ $(checkSum /tmp/nginxConf.zip $sha256sum_nginxConf) = "true" ]] && mv -f /tmp/nginxConf.zip /opt/de_GWD/.repo/nginxConf.zip
 fi
 
 if [[ $(checkSum /opt/de_GWD/.repo/sample.zip $sha256sum_sample) = "false" ]]; then
 rm -rf /tmp/sample.zip
-wget --show-progress -cqO /tmp/sample.zip https://raw.githubusercontent.com/jacyl4/de_GWD/$branch/resource/server/sample.zip
+wget --show-progress -cqO /tmp/sample.zip "${repoBase}/${branch}/resource/server/sample.zip"
 [[ $(checkSum /tmp/sample.zip $sha256sum_sample) = "false" ]] && echo -e "${RED}Download Failed${cRES}" && exit
 [[ $(checkSum /tmp/sample.zip $sha256sum_sample) = "true" ]] && mv -f /tmp/sample.zip /opt/de_GWD/.repo/sample.zip
 fi
 
 localVer=$(awk 'NR==1' /opt/de_GWD/version.php 2>/dev/null)
-remoteVer=$(curl -fsSLo- https://raw.githubusercontent.com/jacyl4/de_GWD/main/version.php | head -n 1)
+remoteVer=$(curl -fsSLo- "${repoBase}/${branch}/version.php" | head -n 1)
 
 if [[ $localVer != $remoteVer ]]; then
 rm -rf /tmp/version.php
-wget --show-progress -cqO /tmp/version.php https://raw.githubusercontent.com/jacyl4/de_GWD/main/version.php
+wget --show-progress -cqO /tmp/version.php "${repoBase}/${branch}/version.php"
 [[ $? -ne 0 ]] && echo -e "${WHITE}Version File${RED} Download Failed${cRES}" && exit
 [[ $(du -sk /tmp/version.php 2>/dev/null | awk '{print$1}') -ge 4 ]] && mv -f /tmp/version.php /opt/de_GWD/version.php
 fi
@@ -1554,7 +1556,7 @@ fi
 
 
 installkernel(){
-bash <(wget --show-progress -cqO- https://raw.githubusercontent.com/jacyl4/de_GWD/main/resource/kernel/installkernel)
+bash <(wget --show-progress -cqO- "${repoBase}/${branch}/resource/kernel/installkernel")
 }
 
 
@@ -2057,8 +2059,11 @@ checkKernel
 enableAutoUpdate(){
 cat << "EOF" >/opt/de_GWD/autoUpdate
 #!/bin/bash
+repoBase="${DE_GWD_REPO_BASE:-https://raw.githubusercontent.com/stuinx/deGWD}"
+repoBase="${repoBase%/}"
+branch="${DE_GWD_RESOURCE_BRANCH:-fix}"
 localVer=$(awk 'NR==1' /opt/de_GWD/version.php)
-remoteVer=$(curl -fsSLo- https://raw.githubusercontent.com/jacyl4/de_GWD/main/version.php | head -n 1)
+remoteVer=$(curl -fsSLo- "${repoBase}/${branch}/version.php" | head -n 1)
 
 echo $localVer >/tmp/de_GWD_Ver
 echo $remoteVer >>/tmp/de_GWD_Ver
@@ -2067,7 +2072,7 @@ VerCP=$(cat /tmp/de_GWD_Ver | sort -rV | uniq | awk NR==2)
 
 if [[ $VerCP == $localVer ]]; then
 rm -rf /tmp/autoUpdate
-wget -t 5 -T 10 -cqO /tmp/autoUpdate https://raw.githubusercontent.com/jacyl4/de_GWD/main/server
+wget -t 5 -T 10 -cqO /tmp/autoUpdate "${repoBase}/${branch}/server"
 
 if [[ $(du -sk /tmp/autoUpdate 2>/dev/null | awk '{print$1}') -gt 70 ]]; then
 sed -i '$d' /tmp/autoUpdate
