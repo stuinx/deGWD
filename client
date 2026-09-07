@@ -2437,7 +2437,6 @@ return "$missing"
 
 postInstall(){
 /opt/de_GWD/ui-NodeOne
-/opt/de_GWD/ui_4am
 verifyRuntimeResources || return 1
 /opt/de_GWD/ui_4h
 systemctl restart smartdns
