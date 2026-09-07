@@ -1130,11 +1130,7 @@ systemctl force-reload nginx
 fi
 
 acmeSetup || return 1
-if [[ -n $topDomain ]]; then
-  "/root/.acme.sh"/acme.sh --issue --dns dns_cf -d "$domain" -d "*.$topDomain" -k ec-256 --dnssleep 180 || return 1
-else
-  "/root/.acme.sh"/acme.sh --issue --dns dns_cf -d "$domain" -k ec-256 --dnssleep 180 || return 1
-fi
+"/root/.acme.sh"/acme.sh --issue --dns dns_cf -d "$domain" -k ec-256 --dnssleep 180 || return 1
 "/root/.acme.sh"/acme.sh --installcert -d "$domain" \
                --key-file       /var/www/ssl/de_GWD.key  \
                --fullchain-file /var/www/ssl/de_GWD.cer \
