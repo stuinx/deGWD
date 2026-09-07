@@ -484,7 +484,7 @@ ln -sf /etc/resolvconf/run/resolv.conf /etc/resolv.conf
 elif [[ -f "/run/resolvconf/resolv.conf" ]]; then
 ln -sf /run/resolvconf/resolv.conf /etc/resolv.conf
 fi
-sed -i '/dns-nameservers /d' /etc/network/interfaces
+[[ -f /etc/network/interfaces ]] && sed -i '/dns-nameservers /d' /etc/network/interfaces
 resolvconf -u
 
 
@@ -1721,7 +1721,7 @@ net.ipv4.conf.default.forwarding = 1' /etc/sysctl.conf
 sysctl -p >/dev/null 2>&1
 
 rm -rf /run/resolvconf/interface
-sed -i '/dns-nameservers /d' /etc/network/interfaces
+[[ -f /etc/network/interfaces ]] && sed -i '/dns-nameservers /d' /etc/network/interfaces
 resolvconf -u
 
 /etc/rc_online.local
@@ -1751,7 +1751,7 @@ systemctl stop wg-quick@wgcf
 systemctl disable wg-quick@wgcf
 
 rm -rf /run/resolvconf/interface
-sed -i '/dns-nameservers /d' /etc/network/interfaces
+[[ -f /etc/network/interfaces ]] && sed -i '/dns-nameservers /d' /etc/network/interfaces
 resolvconf -u
 
 /etc/rc_online.local

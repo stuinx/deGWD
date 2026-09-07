@@ -1200,7 +1200,7 @@ ln -sf /etc/resolvconf/run/resolv.conf /etc/resolv.conf
 elif [[ -f "/run/resolvconf/resolv.conf" ]]; then
 ln -sf /run/resolvconf/resolv.conf /etc/resolv.conf
 fi
-sed -i '/dns-nameservers /d' /etc/network/interfaces
+[[ -f /etc/network/interfaces ]] && sed -i '/dns-nameservers /d' /etc/network/interfaces
 resolvconf -u
 echo -e "${WHITE}[ ${GREEN}✓ ${WHITE}]\c" && echo -e "\t${WHITE}Deploy SmartDNS${cRES}"
 
