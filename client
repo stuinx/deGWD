@@ -141,9 +141,66 @@ fi
 
 repoGet(){
 local repoURL=$1
-curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors --connect-timeout 10 --max-time 30 "$repoURL" || \
-curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors --connect-timeout 10 --max-time 30 "https://ghproxy.net/$repoURL" || \
-curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors --connect-timeout 10 --max-time 30 "https://gh.stuinx.eu.org/$repoURL"
+curl -4 -fsSL --retry 3 --retry-delay 2 --retry-all-errors --connect-timeout 10 --max-time 300 "$repoURL" || \
+curl -4 -fsSL --retry 3 --retry-delay 2 --retry-all-errors --connect-timeout 10 --max-time 300 "https://ghproxy.net/$repoURL" || \
+curl -4 -fsSL --retry 3 --retry-delay 2 --retry-all-errors --connect-timeout 10 --max-time 300 "https://gh.stuinx.eu.org/$repoURL"
+}
+
+
+fetchRuntimeResource(){
+local dest=$1
+local url=$2
+local minKB=$3
+local tmp
+local expected
+
+mkdir -p /opt/de_GWD/.repo
+expected=$(repoGet "${url}.sha256sum" 2>/dev/null | awk 'NF {print $1; exit}')
+if [[ -s "$dest" ]] && [[ $(du -sk "$dest" 2>/dev/null | awk '{print $1}') -ge $minKB ]]; then
+  if [[ -z "$expected" ]] || [[ $(checkSum "$dest" "$expected") = "true" ]]; then
+    return 0
+  fi
+fi
+
+tmp=$(mktemp /tmp/de-gwd-resource.XXXXXX) || return 1
+if ! repoGet "$url" >"$tmp"; then
+  rm -f "$tmp"
+  return 1
+fi
+if [[ -n "$expected" ]] && [[ $(checkSum "$tmp" "$expected") != "true" ]]; then
+  rm -f "$tmp"
+  return 1
+fi
+if [[ $(du -sk "$tmp" 2>/dev/null | awk '{print $1}') -lt $minKB ]]; then
+  rm -f "$tmp"
+  return 1
+fi
+mv -f "$tmp" "$dest"
+}
+
+
+fetchRuntimeResources(){
+echo -e "${WHITE}[...]\c" && echo -e "\t${WHITE}Runtime Resources${cRES}\r\c"
+local failed=0
+fetchRuntimeResource /opt/de_GWD/.repo/geoip.dat \
+  https://raw.githubusercontent.com/Loyalsoldier/geoip/release/geoip.dat 8000 || failed=1
+fetchRuntimeResource /opt/de_GWD/.repo/geosite.dat \
+  https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/geosite.dat 3500 || failed=1
+fetchRuntimeResource /opt/de_GWD/.repo/IPchnroute \
+  https://raw.githubusercontent.com/jacyl4/chnroute/main/IPchnroute 100 || failed=1
+fetchRuntimeResource /opt/de_GWD/.repo/Domains.chn.txt \
+  https://raw.githubusercontent.com/jacyl4/chnroute/main/mosdns_chnlist/Domains.chn.txt 20 || failed=1
+fetchRuntimeResource /opt/de_GWD/.repo/Domains.apple.txt \
+  https://raw.githubusercontent.com/jacyl4/chnroute/main/mosdns_chnlist/Domains.apple.txt 1 || failed=1
+fetchRuntimeResource /opt/de_GWD/.repo/Domains.games.txt \
+  https://raw.githubusercontent.com/jacyl4/chnroute/main/mosdns_chnlist/Domains.games.txt 1 || failed=1
+fetchRuntimeResource /opt/de_GWD/.repo/99-bogus-nxdomain.china.conf \
+  https://raw.githubusercontent.com/jacyl4/chnroute/main/mosdns_chnlist/99-bogus-nxdomain.china.conf 1 || failed=1
+if [[ $failed -ne 0 ]]; then
+  echo -e "${WHITE}[ ${RED}✕ ${WHITE}]\c" && echo -e "\t${WHITE}Runtime Resources${RED} Download Failed${cRES}"
+  return 1
+fi
+echo -e "${WHITE}[ ${GREEN}✓ ${WHITE}]\c" && echo -e "\t${WHITE}Runtime Resources${cRES}"
 }
 
 
@@ -152,13 +209,7 @@ preDL(){
 mkdir -p /opt/de_GWD
 mkdir -p /opt/de_GWD/.repo
 
-sha256sum_IPchnroute=$(curl -fsSLo- https://ghproxy.net/https://raw.githubusercontent.com/jacyl4/chnroute/main/IPchnroute.sha256sum)
-if [[ -n $sha256sum_IPchnroute ]] && [[ $(checkSum /opt/de_GWD/.repo/IPchnroute $sha256sum_IPchnroute) = "false" ]] ; then
-rm -rf /tmp/IPchnroute
-wget --no-check-certificate --show-progress -cqO /tmp/IPchnroute https://ghproxy.net/https://raw.githubusercontent.com/jacyl4/chnroute/main/IPchnroute
-[[ $(checkSum /tmp/IPchnroute $sha256sum_IPchnroute) = "false" ]] && echo -e "${WHITE}IPchnroute${RED} Download Failed${cRES}" && exit
-[[ $(checkSum /tmp/IPchnroute $sha256sum_IPchnroute) = "true" ]] && mv -f /tmp/IPchnroute /opt/de_GWD/.repo/IPchnroute
-fi
+fetchRuntimeResources || exit 1
 
 if [[ -f "./de_GWD_$architecture.zip" ]]; then
     mv -f ./de_GWD_$architecture.zip /opt/de_GWD/.repo/de_GWD.zip
@@ -2364,7 +2415,7 @@ echo -e "${WHITE}[ ${GREEN}✓ ${WHITE}]\c" && echo -e "\t${WHITE}Pi-hole Config
 
 verifyRuntimeResources(){
 local missing=0
-for resource in geoip.dat geosite.dat Domains.chn.txt; do
+for resource in geoip.dat geosite.dat IPchnroute Domains.chn.txt Domains.apple.txt Domains.games.txt 99-bogus-nxdomain.china.conf; do
   if [[ ! -s "/opt/de_GWD/.repo/$resource" ]]; then
     echo -e "${WHITE}Runtime resource${RED} missing: $resource${cRES}"
     missing=1
@@ -2376,6 +2427,9 @@ if [[ -s /opt/de_GWD/.repo/geoip.dat ]]; then
 fi
 if [[ -s /opt/de_GWD/.repo/geosite.dat ]]; then
   cp -f /opt/de_GWD/.repo/geosite.dat /opt/de_GWD/vtrui/geosite.dat || missing=1
+fi
+if [[ -s /opt/de_GWD/.repo/99-bogus-nxdomain.china.conf ]]; then
+  cp -f /opt/de_GWD/.repo/99-bogus-nxdomain.china.conf /etc/dnsmasq.d/99-bogus-nxdomain.china.conf || missing=1
 fi
 
 return "$missing"
