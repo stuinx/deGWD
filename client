@@ -155,12 +155,11 @@ local tmp
 local expected
 
 mkdir -p /opt/de_GWD/.repo
-expected=$(repoGet "${url}.sha256sum" 2>/dev/null | awk 'NF {print $1; exit}')
 if [[ -s "$dest" ]] && [[ $(du -sk "$dest" 2>/dev/null | awk '{print $1}') -ge $minKB ]]; then
-  if [[ -z "$expected" ]] || [[ $(checkSum "$dest" "$expected") = "true" ]]; then
-    return 0
-  fi
+  return 0
 fi
+
+expected=$(repoGet "${url}.sha256sum" 2>/dev/null | awk 'NF {print $1; exit}')
 
 tmp=$(mktemp /tmp/de-gwd-resource.XXXXXX) || return 1
 if ! repoGet "$url" >"$tmp"; then
