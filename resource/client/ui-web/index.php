@@ -1043,7 +1043,7 @@ $.get('./act/markThis.php', {markName:markNametxt}, function(result){window.loca
 })
 
 $('#currentver').click(function(){
-window.open("https://github.com/jacyl4/de_GWD/releases")
+window.open("https://github.com/stuinx/deGWD/releases")
 })
 
 $('#remotever').click(function(){

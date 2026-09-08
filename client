@@ -13,19 +13,84 @@ chmod 777 /tmp
 architecture=$(dpkg --print-architecture)
 export DEBIAN_FRONTEND=noninteractive
 TTYD_Ver="1.7.3"
-branch="main"
+repoBase="${DE_GWD_REPO_BASE:-https://raw.githubusercontent.com/stuinx/deGWD}"
+repoBase="${repoBase%/}"
+repoRef="${DE_GWD_REF:-${DE_GWD_RESOURCE_BRANCH:-codex/upstream-dual-repair}}"
+branch="$repoRef"
 
 
-installCMD=`cat << EOF
-bash <(wget --no-check-certificate -qO- https://ghproxy.net/https://raw.githubusercontent.com/jacyl4/de_GWD/main/client)
+installCMD=$(cat << EOF
+bash <(curl -fsSL --connect-timeout 8 --max-time 120 "${repoBase}/${repoRef}/client" || curl -fsSL --connect-timeout 8 --max-time 120 "https://ghproxy.net/${repoBase}/${repoRef}/client")
 EOF
-`
+)
 
 if [[ $architecture = "arm64" ]];then
 chnAPTsource="mirrors.tuna.tsinghua.edu.cn"
 elif [[ $architecture = "amd64" ]]; then
 chnAPTsource="mirrors.aliyun.com"
 fi
+
+waitAPT(){
+local timeout=180
+while pgrep -x apt >/dev/null 2>&1 || pgrep -x apt-get >/dev/null 2>&1 || pgrep -x dpkg >/dev/null 2>&1 || pgrep -x unattended-upgrade >/dev/null 2>&1; do
+  if (( timeout <= 0 )); then
+    local holders
+    holders=$(pgrep -l '(apt|apt-get|dpkg|unattended-upgrade)' 2>/dev/null | tr '\n' ' ' || true)
+    echo -e "${WHITE}APT lock${RED} is still held${holders:+ (active: $holders)}${cRES}"
+    return 1
+  fi
+  sleep 1
+  ((timeout--))
+done
+return 0
+}
+
+writeRepoConfig(){
+mkdir -p /opt/de_GWD/.repo
+local base_q ref_q
+printf -v base_q '%q' "$repoBase"
+printf -v ref_q '%q' "$repoRef"
+printf 'DE_GWD_REPO_BASE=%s\nDE_GWD_REF=%s\n' "$base_q" "$ref_q" >/opt/de_GWD/.repo/repo.env
+chmod 0644 /opt/de_GWD/.repo/repo.env
+}
+
+writeRepoTools(){
+local base_q ref_q
+printf -v base_q '%q' "$repoBase"
+printf -v ref_q '%q' "$repoRef"
+cat << EOF >/opt/de_GWD/repoGet
+#!/bin/bash
+set -u
+repoBase=${DE_GWD_REPO_BASE:-$base_q}
+repoRef=${DE_GWD_REF:-$ref_q}
+  repoGet(){
+  local repoURL=\$1
+  local downloadTmp candidate result
+  local -a candidates=("\$repoURL")
+  if [[ \$repoURL == https://raw.githubusercontent.com/* || \$repoURL == https://github.com/* ]]; then
+    candidates=()
+    if [[ -n "\${DE_GWD_GH_MIRROR:-}" ]]; then
+      candidates=("\${DE_GWD_GH_MIRROR%/}/\$repoURL")
+    fi
+    candidates+=("https://ghproxy.net/\$repoURL")
+    candidates+=("\$repoURL")
+  fi
+  downloadTmp=\$(mktemp /tmp/de-gwd-download.XXXXXX) || return 1
+  for candidate in "\${candidates[@]}"; do
+    if curl -4 -fsSL --connect-timeout 8 --max-time 180 --retry 2 --retry-delay 2 --retry-connrefused -o "\$downloadTmp" "\$candidate"; then
+      cat "\$downloadTmp"
+      result=\$?
+      rm -f "\$downloadTmp"
+      return "\$result"
+    fi
+  done
+  rm -f "\$downloadTmp"
+  return 1
+}
+repoGet "\$@"
+EOF
+chmod 0755 /opt/de_GWD/repoGet
+}
 
 pkgDEP1(){
 if [[ $architecture = "arm64" ]];then
@@ -35,7 +100,8 @@ Freeze_Package+=($(dpkg -l | grep 'linux-image-' | awk '{print $2}'))
 Freeze_Package+=($(dpkg -l | grep 'linux-headers-' | awk '{print $2}'))
 Freeze_Package+=($(dpkg -l | grep 'linux-dtb-' | awk '{print $2}'))
 echo ${Freeze_Package[@]} | xargs -n1 apt-mark hold
-apt update && apt install apparmor apparmor-utils google-perftools
+waitAPT || return 1
+apt update && apt install -y apparmor apparmor-utils google-perftools || return 1
 fi
 
 [[ -n $(dpkg -l | awk '{print$2}' | grep '^ipset$') ]] && apt remove --purge ipset
@@ -56,6 +122,7 @@ unset aptPKG
 [[ -z $(dpkg -l | awk '{print$2}' | grep '^resolvconf$') ]] && aptPKG+=(resolvconf)
 [[ -z $(dpkg -l | awk '{print$2}' | grep '^nftables$') ]] && aptPKG+=(nftables)
 [[ -z $(dpkg -l | awk '{print$2}' | grep '^ca-certificates$') ]] && aptPKG+=(ca-certificates)
+[[ -z $(dpkg -l | awk '{print$2}' | grep '^cron$') ]] && aptPKG+=(cron)
 [[ -z $(dpkg -l | awk '{print$2}' | grep '^apt-transport-https$') ]] && aptPKG+=(apt-transport-https)
 [[ -z $(dpkg -l | awk '{print$2}' | grep '^gnupg2$') ]] && aptPKG+=(gnupg2)
 [[ -z $(dpkg -l | awk '{print$2}' | grep '^unzip$') ]] && aptPKG+=(unzip)
@@ -66,12 +133,38 @@ unset aptPKG
 [[ -z $(dpkg -l | awk '{print$2}' | grep '^rng-tools-debian$') ]] && aptPKG+=(rng-tools-debian)
 [[ -z $(dpkg -l | awk '{print$2}' | grep '^chrony$') ]] && aptPKG+=(chrony)
 [[ -z $(dpkg -l | awk '{print$2}' | grep '^irqbalance$') ]] && [[ $(nproc --all) -gt 1 ]] && aptPKG+=(irqbalance)
-[[ -n $aptPKG ]] && apt update && apt install $(echo ${aptPKG[@]})
+if [[ -n $aptPKG ]]; then
+waitAPT || return 1
+apt update && apt install -y "${aptPKG[@]}" || return 1
+fi
+systemctl enable --now cron >/dev/null 2>&1 || return 1
+return 0
 }
 
 pkgDEP2(){
-curl -fsSL https://download.docker.com/linux/debian/gpg | install -m 0644 -D /dev/stdin /usr/share/keyrings/docker-archive-keyring.gpg
-echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/debian $(cat /etc/os-release | grep VERSION= | cut -d'(' -f2 | cut -d')' -f1) stable" >/etc/apt/sources.list.d/docker.list
+local dockerKey=/usr/share/keyrings/docker-ce-archive-keyring.gpg
+local dockerKeyTmp
+local dockerKeyURL
+local dockerKeyDownloaded=false
+dockerKeyTmp=$(mktemp) || return 1
+for dockerKeyURL in \
+  https://download.docker.com/linux/debian/gpg \
+  https://mirrors.aliyun.com/docker-ce/linux/debian/gpg \
+  https://mirrors.tuna.tsinghua.edu.cn/docker-ce/linux/debian/gpg \
+  https://mirrors.ustc.edu.cn/docker-ce/linux/debian/gpg; do
+  if curl -4 -fsSL --connect-timeout 8 --max-time 30 --retry 2 --retry-delay 2 --retry-all-errors -o "$dockerKeyTmp" "$dockerKeyURL"; then
+    dockerKeyDownloaded=true
+    break
+  fi
+done
+if [[ $dockerKeyDownloaded != true ]] || ! gpg --dearmor --yes -o "$dockerKey" "$dockerKeyTmp" || [[ ! -s "$dockerKey" ]]; then
+rm -f "$dockerKeyTmp"
+echo -e "${WHITE}Docker apt key${RED} Download Failed${cRES}"
+return 1
+fi
+rm -f "$dockerKeyTmp"
+chmod 0644 "$dockerKey" || return 1
+echo "deb [arch=$(dpkg --print-architecture) signed-by=$dockerKey] https://download.docker.com/linux/debian $(cat /etc/os-release | grep VERSION= | cut -d'(' -f2 | cut -d')' -f1) stable" >/etc/apt/sources.list.d/docker.list
 
 
 unset aptPKG
@@ -92,10 +185,19 @@ unset aptPKG
 [[ -z $(dpkg -l | awk '{print$2}' | grep '^php7.4-json$') ]] && aptPKG+=(php7.4-json)
 [[ -z $(dpkg -l | awk '{print$2}' | grep '^sqlite3$') ]] && aptPKG+=(sqlite3)
 [[ -z $(dpkg -l | awk '{print$2}' | grep '^libmimalloc2.0') ]] && aptPKG+=(libmimalloc2.0)
-[[ -n $aptPKG ]] && apt update && apt install $(echo ${aptPKG[@]})
+if [[ -n $aptPKG ]]; then
+waitAPT || return 1
+apt update && apt install -y "${aptPKG[@]}" || return 1
+fi
+return 0
 }
 
 checkSum(){
+if [[ ! ${2:-} =~ ^[[:xdigit:]]{64}$ ]] || [[ ! -s $1 ]]; then
+  echo "false"
+  return 0
+fi
+local sha256sumL
 sha256sumL=$(sha256sum $1 2>/dev/null | awk '{print$1}')
 if [[ $sha256sumL = $2 ]]; then 
   echo "true"
@@ -104,34 +206,120 @@ elif [[ $sha256sumL != $2 ]]; then
 fi
 }
 
+validChecksum(){
+[[ ${1:-} =~ ^[[:xdigit:]]{64}$ ]]
+}
+
+repoGet(){
+local repoURL=$1
+local downloadTmp candidate
+local -a candidates=("$repoURL")
+if [[ $repoURL == https://raw.githubusercontent.com/* || $repoURL == https://github.com/* ]]; then
+  candidates=()
+  if [[ -n "${DE_GWD_GH_MIRROR:-}" ]]; then
+    candidates=("${DE_GWD_GH_MIRROR%/}/$repoURL")
+  fi
+  candidates+=("https://ghproxy.net/$repoURL")
+  candidates+=("$repoURL")
+fi
+downloadTmp=$(mktemp /tmp/de-gwd-download.XXXXXX) || return 1
+for candidate in "${candidates[@]}"; do
+  if curl -4 -fsSL --connect-timeout 8 --max-time 180 --retry 2 --retry-delay 2 --retry-connrefused -o "$downloadTmp" "$candidate"; then
+    cat "$downloadTmp"
+    local result=$?
+    rm -f "$downloadTmp"
+    return "$result"
+  fi
+  printf 'Download failed, trying next source: %s\n' "$candidate" >&2
+done
+rm -f "$downloadTmp"
+return 1
+}
+
+
+fetchRuntimeResource(){
+local dest=$1
+local url=$2
+local minKB=$3
+local tmp
+local expected
+
+mkdir -p /opt/de_GWD/.repo
+expected=$(repoGet "${url}.sha256sum") || return 1
+expected=${expected%%[[:space:]]*}
+[[ $expected =~ ^[[:xdigit:]]{64}$ ]] || return 1
+if [[ -s "$dest" ]] && [[ $(checkSum "$dest" "$expected") = "true" ]]; then
+  return 0
+fi
+
+tmp=$(mktemp /tmp/de-gwd-resource.XXXXXX) || return 1
+if ! repoGet "$url" >"$tmp"; then
+  rm -f "$tmp"
+  return 1
+fi
+if [[ -n "$expected" ]] && [[ $(checkSum "$tmp" "$expected") != "true" ]]; then
+  rm -f "$tmp"
+  return 1
+fi
+if [[ $(du -sk "$tmp" 2>/dev/null | awk '{print $1}') -lt $minKB ]]; then
+  rm -f "$tmp"
+  return 1
+fi
+mv -f "$tmp" "$dest"
+}
+
+
+fetchRuntimeResources(){
+echo -e "${WHITE}[...]\c" && echo -e "\t${WHITE}Runtime Resources${cRES}\r\c"
+local failed=0
+fetchRuntimeResource /opt/de_GWD/.repo/geoip.dat \
+  https://raw.githubusercontent.com/Loyalsoldier/geoip/release/geoip.dat 8000 || failed=1
+fetchRuntimeResource /opt/de_GWD/.repo/geosite.dat \
+  https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/geosite.dat 3500 || failed=1
+fetchRuntimeResource /opt/de_GWD/.repo/IPchnroute \
+  https://raw.githubusercontent.com/jacyl4/chnroute/main/IPchnroute 100 || failed=1
+fetchRuntimeResource /opt/de_GWD/.repo/Domains.chn.txt \
+  https://raw.githubusercontent.com/jacyl4/chnroute/main/mosdns_chnlist/Domains.chn.txt 20 || failed=1
+fetchRuntimeResource /opt/de_GWD/.repo/Domains.apple.txt \
+  https://raw.githubusercontent.com/jacyl4/chnroute/main/mosdns_chnlist/Domains.apple.txt 1 || failed=1
+fetchRuntimeResource /opt/de_GWD/.repo/Domains.games.txt \
+  https://raw.githubusercontent.com/jacyl4/chnroute/main/mosdns_chnlist/Domains.games.txt 1 || failed=1
+fetchRuntimeResource /opt/de_GWD/.repo/99-bogus-nxdomain.china.conf \
+  https://raw.githubusercontent.com/jacyl4/chnroute/main/mosdns_chnlist/99-bogus-nxdomain.china.conf 1 || failed=1
+if [[ $failed -ne 0 ]]; then
+  echo -e "${WHITE}[ ${RED}✕ ${WHITE}]\c" && echo -e "\t${WHITE}Runtime Resources${RED} Download Failed${cRES}"
+  return 1
+fi
+echo -e "${WHITE}[ ${GREEN}✓ ${WHITE}]\c" && echo -e "\t${WHITE}Runtime Resources${cRES}"
+}
+
 
 
 preDL(){
 mkdir -p /opt/de_GWD
 mkdir -p /opt/de_GWD/.repo
+writeRepoConfig
+writeRepoTools
 
-sha256sum_IPchnroute=$(curl -fsSLo- https://ghproxy.net/https://raw.githubusercontent.com/jacyl4/chnroute/main/IPchnroute.sha256sum)
-if [[ -n $sha256sum_IPchnroute ]] && [[ $(checkSum /opt/de_GWD/.repo/IPchnroute $sha256sum_IPchnroute) = "false" ]] ; then
-rm -rf /tmp/IPchnroute
-wget --no-check-certificate --show-progress -cqO /tmp/IPchnroute https://ghproxy.net/https://raw.githubusercontent.com/jacyl4/chnroute/main/IPchnroute
-[[ $(checkSum /tmp/IPchnroute $sha256sum_IPchnroute) = "false" ]] && echo -e "${WHITE}IPchnroute${RED} Download Failed${cRES}" && exit
-[[ $(checkSum /tmp/IPchnroute $sha256sum_IPchnroute) = "true" ]] && mv -f /tmp/IPchnroute /opt/de_GWD/.repo/IPchnroute
-fi
+fetchRuntimeResources || exit 1
 
-if [[ -f "./de_GWD_$architecture.zip" ]]; then
+if [[ -f "./de_GWD_$architecture.zip" ]] && unzip -tq "./de_GWD_$architecture.zip" >/dev/null 2>&1; then
     mv -f ./de_GWD_$architecture.zip /opt/de_GWD/.repo/de_GWD.zip
 else
-    sha256sum_de_GWD=$(curl -fsSLo- https://ghproxy.net/https://raw.githubusercontent.com/jacyl4/de_GWD/main/de_GWD_"$architecture".zip.sha256sum)
-    if [[ -n $sha256sum_de_GWD ]] && [[ $(checkSum /opt/de_GWD/.repo/de_GWD.zip $sha256sum_de_GWD) = "false" ]]; then
+    sha256sum_de_GWD=$(repoGet "${repoBase}/${branch}/de_GWD_${architecture}.zip.sha256sum") || exit 1
+    if ! validChecksum "$sha256sum_de_GWD"; then
+      echo -e "${WHITE}de_GWD Zip checksum${RED} Download Failed${cRES}"
+      exit 1
+    fi
+    if [[ $(checkSum /opt/de_GWD/.repo/de_GWD.zip "$sha256sum_de_GWD") = "false" ]]; then
     rm -rf /tmp/de_GWD.zip
-    wget --no-check-certificate --show-progress -cqO /tmp/de_GWD.zip https://ghproxy.net/https://raw.githubusercontent.com/jacyl4/de_GWD/main/de_GWD_"$architecture".zip
-    [[ $(checkSum /tmp/de_GWD.zip $sha256sum_de_GWD) = "false" ]] && rm -rf /tmp/de_GWD.zip && wget --no-check-certificate --show-progress -cqO /tmp/de_GWD.zip https://de-gwd.accxio.workers.dev/de_GWD_"$architecture".zip
-    [[ $(checkSum /tmp/de_GWD.zip $sha256sum_de_GWD) = "false" ]] && echo -e "${WHITE}de_GWD Zip${RED} Download Failed${cRES}" && exit
-    [[ $(checkSum /tmp/de_GWD.zip $sha256sum_de_GWD) = "true" ]] && mv -f /tmp/de_GWD.zip /opt/de_GWD/.repo/de_GWD.zip
+    repoGet "${repoBase}/${branch}/de_GWD_${architecture}.zip" >/tmp/de_GWD.zip || exit 1
+    [[ $(checkSum /tmp/de_GWD.zip "$sha256sum_de_GWD") = "false" ]] && echo -e "${WHITE}de_GWD Zip${RED} Download Failed${cRES}" && exit 1
+    mv -f /tmp/de_GWD.zip /opt/de_GWD/.repo/de_GWD.zip
     fi
 fi
 
-[[ -z $(unzip -tq /opt/de_GWD/.repo/de_GWD.zip | grep "No errors detected in compressed data") ]] && echo -e "${WHITE}de_GWD Zip${RED} Download Failed${cRES}" && exit
+[[ -z $(unzip -tq /opt/de_GWD/.repo/de_GWD.zip | grep "No errors detected in compressed data") ]] && echo -e "${WHITE}de_GWD Zip${RED} Download Failed${cRES}" && exit 1
 
 cat << "EOF" >/opt/de_GWD/tcpTime
 #!/bin/bash
@@ -149,44 +337,56 @@ chmod +x /opt/de_GWD/tcpTime
 
 repoDL(){
 echo -e "${WHITE}[...]\c" && echo -e "\t${WHITE}Repo Download${cRES}\r\c"
-sha256sum_nginx=$(curl -fsSLo- https://raw.githubusercontent.com/jacyl4/de_GWD/$branch/resource/nginx/nginx_"$architecture".sha256sum)
-sha256sum_nginxConf=$(curl -fsSLo- https://raw.githubusercontent.com/jacyl4/de_GWD/$branch/resource/nginx/nginxConf.zip.sha256sum)
-sha256sum_client=$(curl -fsSLo- https://raw.githubusercontent.com/jacyl4/de_GWD/$branch/resource/client/Archive.zip.sha256sum)
+sha256sum_nginx=$(repoGet "${repoBase}/${branch}/resource/nginx/nginx_${architecture}.sha256sum") || return 1
+sha256sum_nginxConf=$(repoGet "${repoBase}/${branch}/resource/nginx/nginxConf.zip.sha256sum") || return 1
+sha256sum_client=$(repoGet "${repoBase}/${branch}/resource/client/Archive.zip.sha256sum") || return 1
+sha256sum_nginx=${sha256sum_nginx%%[[:space:]]*}
+sha256sum_nginxConf=${sha256sum_nginxConf%%[[:space:]]*}
+sha256sum_client=${sha256sum_client%%[[:space:]]*}
+validChecksum "$sha256sum_nginx" && validChecksum "$sha256sum_nginxConf" && validChecksum "$sha256sum_client" || return 1
 
 if [[ $(checkSum /usr/sbin/nginx $sha256sum_nginx) = "false" ]]; then
 rm -rf /tmp/nginx
-wget --show-progress -cqO /tmp/nginx https://raw.githubusercontent.com/jacyl4/de_GWD/$branch/resource/nginx/nginx_"$architecture"
-[[ $(checkSum /tmp/nginx $sha256sum_nginx) = "false" ]] && echo -e "${WHITE}NGINX Core${RED} Download Failed${cRES}" && exit
+repoGet "${repoBase}/${branch}/resource/nginx/nginx_${architecture}" >/tmp/nginx
+[[ $(checkSum /tmp/nginx $sha256sum_nginx) = "false" ]] && echo -e "${WHITE}NGINX Core${RED} Download Failed${cRES}" && exit 1
 [[ $(checkSum /tmp/nginx $sha256sum_nginx) = "true" ]] && mv -f /tmp/nginx /usr/sbin/nginx && chmod +x /usr/sbin/nginx
 fi
 
 if [[ $(checkSum /opt/de_GWD/.repo/nginxConf.zip $sha256sum_nginxConf) = "false" ]]; then
 rm -rf /tmp/nginxConf.zip
-wget --show-progress -cqO /tmp/nginxConf.zip https://raw.githubusercontent.com/jacyl4/de_GWD/$branch/resource/nginx/nginxConf.zip
-[[ $(checkSum /tmp/nginxConf.zip $sha256sum_nginxConf) = "false" ]] && echo -e "${RED}Download Failed${cRES}" && exit
+repoGet "${repoBase}/${branch}/resource/nginx/nginxConf.zip" >/tmp/nginxConf.zip
+[[ $(checkSum /tmp/nginxConf.zip $sha256sum_nginxConf) = "false" ]] && echo -e "${RED}Download Failed${cRES}" && exit 1
 [[ $(checkSum /tmp/nginxConf.zip $sha256sum_nginxConf) = "true" ]] && mv -f /tmp/nginxConf.zip /opt/de_GWD/.repo/nginxConf.zip
 fi
 
 if [[ $(ttyd -v 2>&1 | grep -o '[0-9]\.[0-9]\.[0-9]') != $TTYD_Ver ]]; then
-wget --show-progress -cqO /tmp/ttyd https://github.com/tsl0922/ttyd/releases/download/$TTYD_Ver/ttyd.$(uname -m)
-[[ $? -ne 0 ]] && echo -e "${WHITE}TTYD${RED} Download Failed${cRES}"
-[[ $(du -sk /tmp/ttyd 2>/dev/null | awk '{print$1}') -gt 1000 ]] && mv -f /tmp/ttyd /usr/bin/ttyd && chmod +x /usr/bin/ttyd && TTYD_UPDATE="true"
+repoGet https://github.com/tsl0922/ttyd/releases/download/$TTYD_Ver/ttyd.$(uname -m) >/tmp/ttyd || return 1
+if [[ $(du -sk /tmp/ttyd 2>/dev/null | awk '{print$1}') -le 1000 ]]; then
+  echo -e "${WHITE}TTYD${RED} Download Failed${cRES}"
+  return 1
+fi
+mv -f /tmp/ttyd /usr/bin/ttyd && chmod +x /usr/bin/ttyd && TTYD_UPDATE="true"
 fi
 
 if [[ $(checkSum /opt/de_GWD/.repo/client.zip $sha256sum_client) = "false" ]]; then
 rm -rf /tmp/client.zip
-wget --show-progress -cqO /tmp/client.zip https://raw.githubusercontent.com/jacyl4/de_GWD/$branch/resource/client/Archive.zip
-[[ $(checkSum /tmp/client.zip $sha256sum_client) = "false" ]] && echo -e "${WHITE}Client Zip${RED} Download Failed${cRES}" && exit
+repoGet "${repoBase}/${branch}/resource/client/Archive.zip" >/tmp/client.zip
+[[ $(checkSum /tmp/client.zip $sha256sum_client) = "false" ]] && echo -e "${WHITE}Client Zip${RED} Download Failed${cRES}" && exit 1
 [[ $(checkSum /tmp/client.zip $sha256sum_client) = "true" ]] && mv -f /tmp/client.zip /opt/de_GWD/.repo/client.zip
 fi
 
 localVer=$(awk 'NR==1' /opt/de_GWD/.repo/version.php 2>/dev/null)
-remoteVer=$(curl -fsSLo- https://raw.githubusercontent.com/jacyl4/de_GWD/main/version.php | head -n 1)
+remoteVer=$(repoGet "${repoBase}/${branch}/version.php" | head -n 1)
 
 if [[ $localVer != $remoteVer ]] || [[ ! -f '/opt/de_GWD/.repo/version.php' ]]; then
-rm -rf /opt/de_GWD/.repo/version.php
-wget --show-progress -cqO /opt/de_GWD/.repo/version.php https://raw.githubusercontent.com/jacyl4/de_GWD/main/version.php
-[[ $? -ne 0 ]] && echo -e "${WHITE}Version file${RED} Download Failed${cRES}" && exit
+local versionTmp
+versionTmp=$(mktemp /tmp/de-gwd-version.XXXXXX) || return 1
+if ! repoGet "${repoBase}/${branch}/version.php" >"$versionTmp" || [[ ! -s "$versionTmp" ]]; then
+  rm -f "$versionTmp"
+  echo -e "${WHITE}Version file${RED} Download Failed${cRES}"
+  return 1
+fi
+mv -f "$versionTmp" /opt/de_GWD/.repo/version.php
 fi
 
 echo -e "${WHITE}[ ${GREEN}✓ ${WHITE}]\c" && echo -e "\t${WHITE}Repo Download${cRES}"
@@ -196,7 +396,12 @@ echo -e "${WHITE}[ ${GREEN}✓ ${WHITE}]\c" && echo -e "\t${WHITE}Repo Download$
 
 cleanDep(){
 echo -e "${WHITE}[...]\c" && echo -e "\t${WHITE}Clean-up${cRES}\r\c"
-service cron stop
+if ! command -v crontab >/dev/null 2>&1; then
+  waitAPT || return 1
+  apt update && apt install -y cron || return 1
+fi
+systemctl enable --now cron >/dev/null 2>&1 || return 1
+systemctl stop cron >/dev/null 2>&1 || return 1
 
 sed -i "/nfsvers/d" /etc/fstab >/dev/null 2>&1
 sed -i '/quic/d' /etc/nginx/conf.d/*.conf >/dev/null 2>&1
@@ -432,36 +637,32 @@ try_connect() {
     local attempts=3
     local timeout=3
     local attempt=1
-    local response
 
     while [ $attempt -le $attempts ]; do
-        echo "Attempt $attempt to connect to $url"
-        response=$(curl -Is -m $timeout "$url")
-        if [ $? -eq 0 ]; then
-            echo "Successfully connected to $url"
-            echo "$response"
+        if curl -IsS --connect-timeout "$timeout" --max-time "$timeout" "$url" >/dev/null 2>&1; then
             return 0
-        else
-            echo "Failed to connect to $url"
-            ((attempt++))
-            [ $attempt -le $attempts ] && sleep 1
         fi
+        ((attempt++))
+        [ $attempt -le $attempts ] && sleep 1
     done
-    echo "Failed to connect to $url after $attempts attempts"
     return 1
 }
 
 # Execute connections
-serverConnect1=$(try_connect "google.com")
-serverConnect2=$(try_connect "1.1.1.1")
+try_connect "example.com"
+serverConnect1=$?
+try_connect "1.1.1.1"
+serverConnect2=$?
 
 if [[ $1 = "u" ]]; then
     if [[ $2 = "a" ]]; then
-        preDL
-        updateGWD_Green
-        [[ -z $serverConnect1 ]] || [[ -z $serverConnect2 ]] && exit
+        if [[ $serverConnect1 -ne 0 ]] || [[ $serverConnect2 -ne 0 ]]; then
+            return 1
+        fi
+        preDL || return 1
+        updateGWD_Green || return 1
     else
-        if [[ -n $serverConnect1 ]] && [[ -n $serverConnect2 ]] && [[ $(systemctl is-active 'vtrui') = "active" ]]; then
+        if [[ $serverConnect1 -eq 0 ]] && [[ $serverConnect2 -eq 0 ]] && [[ $(systemctl is-active 'vtrui') = "active" ]]; then
         echo -e "${WHITE}de_GWD server connect  ${cRES}\c" && echo -e "\t${WHITE}[${GREEN} ✓ ${WHITE}]${cRES}"
         de_GWDconnect_check="OK"
             echo -e "${GREEN}================================= ${cRES}"
@@ -473,7 +674,7 @@ if [[ $1 = "u" ]]; then
 
             if [[ $updateDebian = "Y" ]] || [[ $updateDebian = "y" ]]; then
             preDL
-            updateAPT
+            updateAPT || exit 1
             fi
             preDL
             updateGWD_Green
@@ -483,26 +684,17 @@ if [[ $1 = "u" ]]; then
         fi
     fi
 else
-    if [[ -n $serverConnect1 ]] && [[ -n $serverConnect2 ]] && [[ $(systemctl is-active 'vtrui') = "active" ]]; then
+    if [[ $serverConnect1 -eq 0 ]] && [[ $serverConnect2 -eq 0 ]] && [[ $(systemctl is-active 'vtrui') = "active" ]]; then
         echo -e "${WHITE}[ ${GREEN}✓ ${WHITE}]\c" && echo -e "\t${WHITE}de_GWD server connect${cRES}"
     else
         echo -e "${WHITE}[ ${RED}✕ ${WHITE}]\c" && echo -e "\t${WHITE}de_GWD server connect${cRES}"
     fi
 
 
-if [[ -z $serverConnect1 ]] || [[ -z $serverConnect2 ]]; then
+if [[ $serverConnect1 -ne 0 ]] || [[ $serverConnect2 -ne 0 ]] || [[ $(systemctl is-active 'vtrui') != "active" ]]; then
 serverStatus
-echo -e "\t${RED}Failed! Stop mosdns smartdns nftables.${cRES}"
-cat << EOF >/etc/resolv.conf
-nameserver 119.29.29.29
-nameserver 180.76.76.76
-nameserver 114.114.114.114
-nameserver 223.5.5.5
-EOF
-systemctl stop mosdns >/dev/null 2>&1
-systemctl stop smartdns >/dev/null 2>&1
-systemctl stop nftables >/dev/null 2>&1
-exit
+echo -e "\t${YELLOW}Connection check failed; services kept running.${cRES}"
+return 1
 fi
 fi
 }
@@ -616,13 +808,9 @@ DefaultLimitNPROC=1000000
 EOF
 systemctl daemon-reload
 
-rm -f /var/cache/apt/archives/lock
-rm -f /var/lib/apt/lists/lock
-rm -f /var/lib/dpkg/lock
-rm -f /var/lib/dpkg/lock-frontend
 dpkg --configure -a
 
-pkgDEP1
+pkgDEP1 || exit 1
 
 cat << EOF >/etc/default/rng-tools-debian
 # -*- mode: sh -*-
@@ -1000,7 +1188,7 @@ chmod +x /opt/de_GWD/vtrui/vtrui
 rm -rf /tmp/de_GWD*
 else
 rm -rf /opt/de_GWD/.repo/de_GWD.zip
-echo -e "${WHITE}de_GWD Zip${RED} Download Failed${cRES}" && exit
+echo -e "${WHITE}de_GWD Zip${RED} Download Failed${cRES}" && exit 1
 fi
 echo -e "${WHITE}[ ${GREEN}✓ ${WHITE}]\c" && echo -e "\t${WHITE}Proxy Components Prepared${cRES}"
 
@@ -1117,7 +1305,7 @@ ln -sf /etc/resolvconf/run/resolv.conf /etc/resolv.conf
 elif [[ -f "/run/resolvconf/resolv.conf" ]]; then
 ln -sf /run/resolvconf/resolv.conf /etc/resolv.conf
 fi
-sed -i '/dns-nameservers /d' /etc/network/interfaces
+[[ -f /etc/network/interfaces ]] && sed -i '/dns-nameservers /d' /etc/network/interfaces
 resolvconf -u
 echo -e "${WHITE}[ ${GREEN}✓ ${WHITE}]\c" && echo -e "\t${WHITE}Deploy SmartDNS${cRES}"
 
@@ -1218,6 +1406,12 @@ echo -e "${WHITE}Domain: \c" && echo -e "\t${WHITE}IP: ${cRES}\r\c"
 systemctl stop mosdns
 sleep 5
 domainIP=$(dig @127.0.0.1 $domain -4p 5332 +short | grep -Po '\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}' | grep -v "127.0.0.1" | xargs -n 1 | awk NR==1)
+if [[ -z $domainIP ]]; then
+for dnsServer in 1.1.1.1 8.8.8.8 114.114.114.114 223.5.5.5; do
+  domainIP=$(dig @$dnsServer $domain -4 +short +time=3 +tries=1 | grep -Po '\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}' | grep -v "127.0.0.1" | xargs -n 1 | awk NR==1)
+  [[ -n $domainIP ]] && break
+done
+fi
 echo -e "${WHITE}Domain: ${YELLOW}$domain\c" && echo -e "\t${WHITE}IP: ${YELLOW}$domainIP${cRES}"
 echo
 echo -e "${BLUE}################################################################# ${cRES}"
@@ -1230,6 +1424,7 @@ echo
 installXray(){
 echo -e "${WHITE}[...]\c" && echo -e "\t${WHITE}Deploy vtrui${cRES}\r\c"
 
+# Stock Debian kernels can reject TCP_FASTOPEN before the transparent socket is ready.
 cat << EOF >/opt/de_GWD/vtrui/config.json
 {
   "log": {
@@ -1249,7 +1444,7 @@ cat << EOF >/opt/de_GWD/vtrui/config.json
       "listen":"127.0.0.1",
       "protocol":"dokodemo-door",
       "settings":{"network":"tcp,udp","followRedirect":true},
-      "streamSettings":{"sockopt":{"tproxy":"tproxy","mark":255,"tcpFastOpen":true,"tcpMptcp":true}}
+      "streamSettings":{"sockopt":{"tproxy":"tproxy","mark":255,"tcpMptcp":true}}
     }
   ],
   "outbounds":[
@@ -1422,7 +1617,7 @@ EOF
 chmod +x /opt/de_GWD/nftables/SET_V2NODE.nft
 /opt/de_GWD/nftables/SET_V2NODE.nft
 
-if [[ $(du -sk /opt/de_GWD/.repo/IPchnroute 2>/dev/null | awk '{print$1}') -gt 100 ]]; then
+if [[ $(du -sk /opt/de_GWD/.repo/IPchnroute 2>/dev/null | awk '{print$1}') -ge 100 ]]; then
 cp -f /opt/de_GWD/.repo/IPchnroute /opt/de_GWD/nftables/IP_CHNROUTE
 sed -i '/^\s*$/d' /opt/de_GWD/nftables/IP_CHNROUTE
 sed -i 's/$/,/g' /opt/de_GWD/nftables/IP_CHNROUTE
@@ -1711,12 +1906,39 @@ table ip de_GWD {
 EOF
 chmod +x /opt/de_GWD/nftables/nftables
 
+cat << "EOF" >/opt/de_GWD/nftables/tproxy_route.sh
+#!/bin/bash
+set -u
+
+if [[ "${1:-}" == "--stop" ]]; then
+    /usr/sbin/ip rule del fwmark 0x9 table 220 prio 100 >/dev/null 2>&1 || true
+    /usr/sbin/ip route del local default dev lo scope host table 220 >/dev/null 2>&1 || true
+    exit 0
+fi
+
+for _ in {1..10}; do
+    /usr/sbin/ip route replace local default dev lo scope host table 220 >/dev/null 2>&1 || true
+    if ! /usr/sbin/ip rule show | grep -Eq 'fwmark 0x9.*lookup 220'; then
+        /usr/sbin/ip rule add fwmark 0x9 table 220 prio 100 >/dev/null 2>&1 || true
+    fi
+    if /usr/sbin/ip rule show | grep -Eq 'fwmark 0x9.*lookup 220'; then
+        exit 0
+    fi
+    sleep 1
+done
+
+echo "TProxy policy route was not installed" >&2
+exit 1
+EOF
+chmod 0755 /opt/de_GWD/nftables/tproxy_route.sh
+
 rm -rf /lib/systemd/system/nftables.service
 cat << EOF >/etc/systemd/system/nftables.service
 [Unit]
 Description=nftables
-Wants=network-pre.target
-Before=network-pre.target shutdown.target
+Wants=network-online.target
+After=network-online.target
+Before=shutdown.target
 Conflicts=shutdown.target
 DefaultDependencies=no
 
@@ -1726,8 +1948,8 @@ RemainAfterExit=yes
 StandardInput=null
 ProtectSystem=full
 ProtectHome=true
-ExecStart=/bin/bash -c '/etc/rc_online.local' ; /bin/bash -c '/opt/de_GWD/nftables/flowtable_eth.sh' ; /usr/sbin/nft -f /opt/de_GWD/nftables/nftables ; $(which ip) route add local default dev lo scope host table 220 ; $(which ip) rule add fwmark 0x9 table 220 prio 100
-ExecStop=/usr/sbin/nft flush ruleset ; $(which ip) rule del table 220 ; $(which ip) route del local default dev lo table 220
+ExecStart=/bin/bash -c '/etc/rc_online.local' ; /bin/bash -c '/opt/de_GWD/nftables/flowtable_eth.sh' ; /usr/sbin/nft -f /opt/de_GWD/nftables/nftables ; /opt/de_GWD/nftables/tproxy_route.sh
+ExecStop=/usr/sbin/nft flush ruleset ; /opt/de_GWD/nftables/tproxy_route.sh --stop
 
 [Install]
 WantedBy=sysinit.target
@@ -1737,11 +1959,16 @@ systemctl enable nftables >/dev/null 2>&1
 systemctl restart nftables
 
 if [[ $(systemctl is-active 'nftables') != "active" ]]; then
-  systemctl restart nftables
-  if [[ $? -ne 0 ]]; then
+systemctl restart nftables
+if [[ $? -ne 0 ]]; then
   rm -rf /opt/de_GWD/nftables/flowtable.nft >/dev/null 2>&1
   systemctl restart nftables
   fi
+fi
+
+if ! systemctl is-active --quiet nftables; then
+  echo -e "${WHITE}nftables${RED} Start Failed${cRES}"
+  return 1
 fi
 
 echo -e "${WHITE}[ ${GREEN}✓ ${WHITE}]\c" && echo -e "\t${WHITE}Deploy nftables${cRES}"
@@ -1760,11 +1987,22 @@ EOF
 
 echo "deb [signed-by=/etc/apt/keyrings/deb.sury.org.gpg] https://packages.sury.org/php/ $(cat /etc/os-release | grep VERSION= | cut -d'(' -f2 | cut -d')' -f1) main" >/etc/apt/sources.list.d/php.list
 apt-key del 95BD4743 >/dev/null 2>&1
-curl -sSLo /etc/apt/keyrings/deb.sury.org.gpg https://packages.sury.org/php/apt.gpg
-[[ $? -ne 0 ]] && echo -e "${WHITE}PHP apt key${RED} Download Failed${cRES}"
+install -d -m 0755 /etc/apt/keyrings || return 1
+if ! curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors -o /etc/apt/keyrings/deb.sury.org.gpg https://packages.sury.org/php/apt.gpg || [[ ! -s /etc/apt/keyrings/deb.sury.org.gpg ]]; then
+echo -e "${WHITE}PHP apt key${RED} Download Failed${cRES}"
+return 1
+fi
 
-apt update --fix-missing && apt upgrade --allow-downgrades -y
-apt full-upgrade -y && apt autoremove --purge -y && apt clean -y && apt autoclean -y
+waitAPT || return 1
+if ! apt update --fix-missing ||
+   ! apt upgrade --allow-downgrades -y ||
+   ! apt full-upgrade -y ||
+   ! apt autoremove --purge -y ||
+   ! apt clean -y ||
+   ! apt autoclean -y; then
+echo -e "${WHITE}Debian ${RED}Update Failed${cRES}"
+return 1
+fi
 
 echo -e "${WHITE}[ ${GREEN}✓ ${WHITE}]\c" && echo -e "\t${WHITE}Debian ${GREEN}Updated${cRES}"
 }
@@ -1776,9 +2014,9 @@ echo -e "${WHITE}[...]\c" && echo -e "\t${WHITE}Dependencies${cRES}\r\c"
 sed -i "/www-data/d" /etc/sudoers
 sed -i "/Allow members of group sudo to execute any command/a\www-data ALL=(root)  NOPASSWD:ALL" /etc/sudoers
 
-pkgDEP1
+pkgDEP1 || return 1
 
-pkgDEP2
+pkgDEP2 || return 1
 
 DPKGclean=$(dpkg --list | grep "^rc" | cut -d " " -f 3)
 [[ -n $DPKGclean ]] && echo $DPKGclean | xargs sudo dpkg --purge
@@ -1943,7 +2181,7 @@ unzip /opt/de_GWD/.repo/nginxConf.zip -d /etc/nginx >/dev/null
 rm -rf /tmp/nginxConf
 else
 rm -rf /opt/de_GWD/.repo/nginxConf.zip
-echo -e "${WHITE}NGINX Configure${RED} Download Failed${cRES}" && exit
+echo -e "${WHITE}NGINX Configure${RED} Download Failed${cRES}" && exit 1
 fi
 
 rm -rf /tmp/nginx
@@ -2190,7 +2428,16 @@ cp -f /opt/de_GWD/.repo/version.php /var/www/html/act/version.php
 
 pullpihole(){
 echo -e "${WHITE}[...]\c" && echo -e "\t${WHITE}Install Pi-hole${cRES}\r\c"
-docker pull pihole/pihole:latest
+if docker image inspect pihole/pihole:latest >/dev/null 2>&1; then
+  return 0
+fi
+if docker pull pihole/pihole:latest ||
+   { docker pull mps.rxm.xyz/pihole/pihole:latest &&
+     docker tag mps.rxm.xyz/pihole/pihole:latest pihole/pihole:latest; }; then
+  return 0
+fi
+echo -e "${WHITE}Pi-hole image${RED} Download Failed${cRES}"
+return 1
 }
 
 
@@ -2225,9 +2472,14 @@ docker run -d \
 -v /etc/localtime:/etc/localtime \
 -v /opt/de_GWD/pihole:/etc/pihole \
 -v /etc/dnsmasq.d:/etc/dnsmasq.d \
-pihole/pihole:latest
+pihole/pihole:latest || return 1
 
-python3 <<EOF
+if [[ $(docker inspect -f '{{.State.Running}}' pihole 2>/dev/null) != "true" ]]; then
+  echo -e "${WHITE}Pi-hole${RED} Start Failed${cRES}"
+  return 1
+fi
+
+if ! python3 <<EOF
 import toml
 with open("/opt/de_GWD/pihole/pihole.toml", "r") as f:
  data = toml.load(f)
@@ -2237,6 +2489,9 @@ data['webserver']['api']['pwhash'] = "$piholePW"
 with open("/opt/de_GWD/pihole/pihole.toml", "w") as f:
     toml.dump(data, f)
 EOF
+then
+  return 1
+fi
 }
 
 
@@ -2248,7 +2503,7 @@ systemctl daemon-reload >/dev/null
 
 update-rc.d -f dhcpd remove >/dev/null 2>&1
 
-python3 <<EOF
+if ! python3 <<EOF
 import toml
 with open("/opt/de_GWD/pihole/pihole.toml", "r") as f:
  data = toml.load(f)
@@ -2277,6 +2532,9 @@ data["misc"]["check"]["load"] = False
 with open("/opt/de_GWD/pihole/pihole.toml", "w") as f:
     toml.dump(data, f)
 EOF
+then
+  return 1
+fi
 
 chmod -R 777 /opt/de_GWD/pihole
 
@@ -2294,9 +2552,33 @@ echo -e "${WHITE}[ ${GREEN}✓ ${WHITE}]\c" && echo -e "\t${WHITE}Pi-hole Config
 
 
 
+verifyRuntimeResources(){
+local missing=0
+for resource in geoip.dat geosite.dat IPchnroute Domains.chn.txt Domains.apple.txt Domains.games.txt 99-bogus-nxdomain.china.conf; do
+  if [[ ! -s "/opt/de_GWD/.repo/$resource" ]]; then
+    echo -e "${WHITE}Runtime resource${RED} missing: $resource${cRES}"
+    missing=1
+  fi
+done
+
+if [[ -s /opt/de_GWD/.repo/geoip.dat ]]; then
+  cp -f /opt/de_GWD/.repo/geoip.dat /opt/de_GWD/vtrui/geoip.dat || missing=1
+fi
+if [[ -s /opt/de_GWD/.repo/geosite.dat ]]; then
+  cp -f /opt/de_GWD/.repo/geosite.dat /opt/de_GWD/vtrui/geosite.dat || missing=1
+fi
+if [[ -s /opt/de_GWD/.repo/99-bogus-nxdomain.china.conf ]]; then
+  cp -f /opt/de_GWD/.repo/99-bogus-nxdomain.china.conf /etc/dnsmasq.d/99-bogus-nxdomain.china.conf || missing=1
+  chmod 0644 /etc/dnsmasq.d/99-bogus-nxdomain.china.conf || missing=1
+fi
+
+return "$missing"
+}
+
+
 postInstall(){
 /opt/de_GWD/ui-NodeOne
-/opt/de_GWD/ui_4am
+verifyRuntimeResources || return 1
 /opt/de_GWD/ui_4h
 systemctl restart smartdns
 systemctl restart mosdns
@@ -2364,10 +2646,6 @@ cat << "EOF" >/etc/rc_kernel.local
 #!/bin/bash
 PATH='/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
 
-rm -f /var/cache/apt/archives/lock
-rm -f /var/lib/apt/lists/lock
-rm -f /var/lib/dpkg/lock
-rm -f /var/lib/dpkg/lock-frontend
 dpkg --configure -a
 
 dpkg --list | grep linux-image | awk '{print $2}' | grep -Fv $(uname -r) | while read line; do
@@ -2395,7 +2673,18 @@ cat << EOF >>/tmp/now.cron
 EOF
 crontab /tmp/now.cron
 rm -rf /tmp/now.cron
-service cron restart
+systemctl enable --now cron >/dev/null 2>&1 || return 1
+
+for service in smartdns mosdns vtrui nftables nginx php7.4-fpm; do
+  if ! systemctl is-active --quiet "$service"; then
+    echo -e "${WHITE}Service${RED} failed: $service${cRES}"
+    return 1
+  fi
+done
+if [[ $(docker inspect -f '{{.State.Running}}' pihole 2>/dev/null) != "true" ]]; then
+  echo -e "${WHITE}Pi-hole${RED} is not running${cRES}"
+  return 1
+fi
 
 rm -rf /tmp/ui-script
 rm -rf /tmp/ui-web
@@ -2410,7 +2699,7 @@ fi
 
 
 installkernel(){
-bash <(wget --show-progress -cqO- https://raw.githubusercontent.com/jacyl4/de_GWD/main/resource/kernel/installkernel)
+bash <(repoGet "${repoBase}/${branch}/resource/kernel/installkernel")
 }
 
 
@@ -2525,6 +2814,11 @@ nameserver 114.114.114.114
 nameserver 223.5.5.5
 EOF
 
+# Restore system time from RTC before apt; snapshot guests often boot with a stale clock.
+hwclock --hctosys >/dev/null 2>&1 || true
+httpDate=$(curl -fsSI --connect-timeout 5 --max-time 8 aliyun.com 2>/dev/null | grep -i '^date:' | cut -d' ' -f2-)
+[[ -n $httpDate ]] && date -s "$httpDate" >/dev/null 2>&1 || true
+
 if [[ $(cat /etc/os-release | grep VERSION= | cut -d'(' -f2 | cut -d')' -f1) = "stretch" ]]; then
 cat << EOF >/etc/apt/sources.list
 deb http://$chnAPTsource/debian buster main contrib non-free
@@ -2549,17 +2843,24 @@ sed -i "s/ bullseye / bookworm /g" /etc/apt/sources.list.d/* >/dev/null 2>&1
 apt update --fix-missing && apt upgrade --allow-downgrades -y
 apt full-upgrade -y && apt autoremove --purge -y && apt clean -y && apt autoclean -y
 
-preInstall
+preInstall || exit 1
 
 preConf
 
 preDL
 
+updateAPT || exit 1
+
+apt --reinstall install -y ca-certificates || exit 1
+
+installDep || exit 1
+
+repoDL || exit 1
+
 installSmartDNS
 
 installXray
 
-installNftables
 
 echo "{}" >/opt/de_GWD/0conf
 jq '.address={}' /opt/de_GWD/0conf |\
@@ -2584,15 +2885,6 @@ jq --arg path "$path" '.update.v2node.path=$path' | sponge /opt/de_GWD/0conf
 [[ -n $doh1 ]] && jq --arg doh1 "$doh1" '.dns.doh+=[$doh1]' /opt/de_GWD/0conf | sponge /opt/de_GWD/0conf
 chmod 666 /opt/de_GWD/0conf
 
-de_GWDconnect
-
-updateAPT
-
-apt --reinstall install ca-certificates
-
-installDep
-
-repoDL
 
 installNginx
 
@@ -2600,13 +2892,15 @@ nginxSet
 
 installWebUI
 
-pullpihole
+pullpihole || exit 1
 
-installPihole
+installPihole || exit 1
 
-piholeSet
+piholeSet || exit 1
 
-postInstall
+installNftables || exit 1
+
+postInstall || exit 1
 
 echo -e "${WHITE}[ ${GREEN}✓ ${WHITE}]\c" && echo -e "\t${WHITE}de_GWD ${GREEN}Installed${cRES}"
 }
@@ -2616,7 +2910,7 @@ echo -e "${WHITE}[ ${GREEN}✓ ${WHITE}]\c" && echo -e "\t${WHITE}de_GWD ${GREEN
 updateGWD(){
 [[ -f "/opt/de_GWD/version.php" ]] && echo -e "${RED}This is not client${cRES}" && exit
 
-cleanDep
+cleanDep || exit 1
 
 preUpdate
 
@@ -2632,9 +2926,9 @@ echo -e "${WHITE}[ ${GREEN}✓ ${WHITE}]\c" && echo -e "\t${WHITE}de_GWD ${GREEN
 
 
 updateGWD_Green(){
-repoDL
+repoDL || exit 1
 
-installDep
+installDep || exit 1
 
 installNginx
 
@@ -2642,7 +2936,7 @@ nginxSet
 
 installWebUI
 
-preInstall
+preInstall || exit 1
 
 preConf
 
@@ -2650,7 +2944,7 @@ installSmartDNS
 
 installXray
 
-installNftables
+installNftables || exit 1
 
 pullpihole
 
@@ -2658,29 +2952,29 @@ installPihole
 
 piholeSet
 
-postInstall
+postInstall || exit 1
 }
 
 updateGWD_Red(){
-preInstall
+preInstall || exit 1
 
 preConf
 
 preDL
 
+updateAPT || exit 1
+
+installDep || exit 1
+
+repoDL || exit 1
+
 installSmartDNS
 
 installXray
 
-installNftables
+installNftables || exit 1
 
 de_GWDconnect
-
-updateAPT
-
-installDep
-
-repoDL
 
 installNginx
 
@@ -2694,7 +2988,7 @@ installPihole
 
 piholeSet
 
-postInstall
+postInstall || exit 1
 }
 
 
@@ -2769,7 +3063,7 @@ else
   echo -e "${WHITE} GeoIP          \c" && echo -e "${WHITE}[ ${RED}✕ ${WHITE}]${cRES}"
 fi
 
-if [[ $(du -sk /opt/de_GWD/nftables/IP_CHNROUTE 2>/dev/null | awk '{print$1}') -gt 100 ]]; then
+if [[ $(du -sk /opt/de_GWD/nftables/IP_CHNROUTE 2>/dev/null | awk '{print$1}') -ge 100 ]]; then
   echo -e "${WHITE} ChnrouteIP     \c" && echo -e "${WHITE}[ ${GREEN}✓ ${WHITE}]${cRES}"
 else
   echo -e "${WHITE} ChnrouteIP     \c" && echo -e "${WHITE}[ ${RED}✕ ${WHITE}]${cRES}"
