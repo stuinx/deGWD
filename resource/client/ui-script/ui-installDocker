@@ -9,7 +9,7 @@ CYAN='\E[1;36m'
 WHITE='\E[1;37m'
 cRES='\E[0m'
 dockerComposeVer_reserved="1.29.2"
-GWD_DOCKER_SOURCE=${GWD_DOCKER_SOURCE:-https://mirrors.tuna.tsinghua.edu.cn/docker-ce}
+GWD_DOCKER_SOURCE=${GWD_DOCKER_SOURCE:-https://mirrors.ustc.edu.cn/docker-ce}
 GWD_DOCKER_GPG_SOURCE=${GWD_DOCKER_GPG_SOURCE:-https://download.docker.com}
 GWD_GITHUB_PROXY=${GWD_GITHUB_PROXY:-}
 

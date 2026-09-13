@@ -28,12 +28,12 @@ curl -fsSL https://raw.githubusercontent.com/stuinx/deGWD/codex/install-test-202
 bash /tmp/de-gwd-client
 ```
 
-客户端默认使用清华大学 HTTPS Debian/Docker 镜像；GitHub 访问受限时可设置 HTTPS 下载代理。也可在执行前覆盖 `GWD_REPO` 和 `GWD_REF`，用于测试其他分支：
+客户端默认使用中国科学技术大学 HTTPS Debian/Docker 镜像；GitHub 访问受限时可设置 HTTPS 下载代理。也可在执行前覆盖 `GWD_REPO` 和 `GWD_REF`，用于测试其他分支：
 
 ```bash
 GWD_GITHUB_PROXY=https://你的下载代理 \
-GWD_DEBIAN_MIRROR=https://mirrors.tuna.tsinghua.edu.cn \
-GWD_DOCKER_SOURCE=https://mirrors.tuna.tsinghua.edu.cn/docker-ce \
+GWD_DEBIAN_MIRROR=https://mirrors.ustc.edu.cn \
+GWD_DOCKER_SOURCE=https://mirrors.ustc.edu.cn/docker-ce \
 bash /tmp/de-gwd-client
 ```
 

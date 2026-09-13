@@ -18,9 +18,9 @@ GWD_SOURCE_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 GWD_REPO=${GWD_REPO:-stuinx/deGWD}
 GWD_REF=${GWD_REF:-codex/install-test-20260913}
 GWD_GITHUB_PROXY=${GWD_GITHUB_PROXY:-}
-GWD_DOCKER_SOURCE=${GWD_DOCKER_SOURCE:-https://mirrors.tuna.tsinghua.edu.cn/docker-ce}
+GWD_DOCKER_SOURCE=${GWD_DOCKER_SOURCE:-https://mirrors.ustc.edu.cn/docker-ce}
 GWD_DOCKER_GPG_SOURCE=${GWD_DOCKER_GPG_SOURCE:-https://download.docker.com}
-GWD_DEBIAN_MIRROR=${GWD_DEBIAN_MIRROR:-https://mirrors.tuna.tsinghua.edu.cn}
+GWD_DEBIAN_MIRROR=${GWD_DEBIAN_MIRROR:-https://mirrors.ustc.edu.cn}
 branch="$GWD_REF"
 
 gwdDownload(){
@@ -28,7 +28,11 @@ gwdDownload(){
     url=${url#https://ghproxy.net/}
     if [[ $url == https://raw.githubusercontent.com/jacyl4/de_GWD/* ]]; then
         relative=${url#https://raw.githubusercontent.com/jacyl4/de_GWD/}
-        relative=${relative#*/}
+        if [[ $relative == "$branch/"* ]]; then
+            relative=${relative#"$branch/"}
+        else
+            relative=${relative#*/}
+        fi
         if [[ -f "$GWD_SOURCE_DIR/$relative" ]]; then
             cp -- "$GWD_SOURCE_DIR/$relative" "$output"
             return $?
