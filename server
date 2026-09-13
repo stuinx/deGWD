@@ -9,13 +9,91 @@ CYAN='\E[1;36m'
 WHITE='\E[1;37m'
 cRES='\E[0m'
 
-chmod 1777 /tmp
-architecture=$(dpkg --print-architecture)
-[[ "openvz lxc lxc-libvirt systemd-nspawn docker podman proot pouch" =~ $(systemd-detect-virt) ]] && virt_type="container"
+DE_GWD_TEST_MODE=${DE_GWD_TEST_MODE:-0}
+if [[ $DE_GWD_TEST_MODE != 1 ]]; then
+  chmod 777 /tmp
+  architecture=$(dpkg --print-architecture)
+  [[ "openvz lxc lxc-libvirt systemd-nspawn docker podman proot pouch" =~ $(systemd-detect-virt) ]] && virt_type="container"
+else
+  architecture=${architecture:-test}
+  virt_type=${virt_type:-test}
+fi
 export DEBIAN_FRONTEND=noninteractive
 branch="dev"
 
-[[ -f "/etc/nginx/conf.d/default.conf" ]] && sed -i 's/fastopen=128/fastopen=500/g' /etc/nginx/conf.d/default.conf
+DE_GWD_DATA_DIR=${DE_GWD_DATA_DIR:-/opt/de_GWD}
+DE_GWD_XRAY_DIR=${DE_GWD_XRAY_DIR:-$DE_GWD_DATA_DIR/vtrui}
+DE_GWD_NGINX_CONF_DIR=${DE_GWD_NGINX_CONF_DIR:-/etc/nginx/conf.d}
+DE_GWD_CONFIG_LOCK=${DE_GWD_CONFIG_LOCK:-/run/lock/de_GWD-config.lock}
+DE_GWD_TXN_TMPDIR=${DE_GWD_TXN_TMPDIR:-/tmp}
+DE_GWD_XRAY_BIN=${DE_GWD_XRAY_BIN:-$DE_GWD_XRAY_DIR/vtrui}
+DE_GWD_TCPPF_SETTINGS=${DE_GWD_TCPPF_SETTINGS:-$DE_GWD_DATA_DIR/tcppf.json}
+DE_GWD_HAPROXY_CONFIG=${DE_GWD_HAPROXY_CONFIG:-/etc/haproxy/haproxy.cfg}
+DE_GWD_HAPROXY_SERVICE=${DE_GWD_HAPROXY_SERVICE:-/etc/systemd/system/haproxy.service}
+DE_GWD_HAPROXY_BIN=${DE_GWD_HAPROXY_BIN:-haproxy}
+DE_GWD_WIREGUARD_DIR=${DE_GWD_WIREGUARD_DIR:-/etc/wireguard}
+DE_GWD_WGCF_CONF=${DE_GWD_WGCF_CONF:-$DE_GWD_WIREGUARD_DIR/wgcf.conf}
+DE_GWD_WGCF_BIN=${DE_GWD_WGCF_BIN:-/usr/local/bin/wgcf}
+DE_GWD_WARP_POSTUP=${DE_GWD_WARP_POSTUP:-$DE_GWD_DATA_DIR/warp_postup.sh}
+DE_GWD_WARP_POSTDOWN=${DE_GWD_WARP_POSTDOWN:-$DE_GWD_DATA_DIR/warp_postdown.sh}
+DE_GWD_WARP_SETTINGS=${DE_GWD_WARP_SETTINGS:-$DE_GWD_DATA_DIR/warp.json}
+DE_GWD_SOCKS5_EGRESS_SETTINGS=${DE_GWD_SOCKS5_EGRESS_SETTINGS:-$DE_GWD_DATA_DIR/socks5_egress.json}
+DE_GWD_SOCKS5_EGRESS_SERVICE=${DE_GWD_SOCKS5_EGRESS_SERVICE:-/etc/systemd/system/de_GWD-socks5-egress.service}
+DE_GWD_TUN2SOCKS_BIN=${DE_GWD_TUN2SOCKS_BIN:-/usr/local/bin/tun2socks}
+DE_GWD_SOCKS5_POSTUP=${DE_GWD_SOCKS5_POSTUP:-$DE_GWD_DATA_DIR/socks5_egress_postup.sh}
+DE_GWD_SOCKS5_POSTDOWN=${DE_GWD_SOCKS5_POSTDOWN:-$DE_GWD_DATA_DIR/socks5_egress_postdown.sh}
+DE_GWD_TXN_DIR=
+DE_GWD_TXN_MANIFEST=
+
+download_file(){
+  local output=$1
+  shift
+  local url
+  local attempt
+  for url in "$@"; do
+    for attempt in 1 2 3; do
+      if curl -fsSL --connect-timeout 8 --max-time "${DOWNLOAD_MAX_TIME:-120}" "$url" -o "$output"; then
+        return 0
+      fi
+      rm -f "$output"
+      sleep 2
+    done
+  done
+  return 1
+}
+
+fetch_text(){
+  local url
+  local attempt
+  for url in "$@"; do
+    for attempt in 1 2 3; do
+      if curl -fsSL --connect-timeout 8 --max-time "${DOWNLOAD_MAX_TIME:-120}" "$url"; then
+        return 0
+      fi
+      sleep 2
+    done
+  done
+  return 1
+}
+
+github_raw(){
+  local path=$1
+  fetch_text \
+    "https://ghproxy.net/https://raw.githubusercontent.com/$path" \
+    "https://raw.githubusercontent.com/$path"
+}
+
+github_download(){
+  local output=$1
+  local path=$2
+  download_file "$output" \
+    "https://ghproxy.net/https://raw.githubusercontent.com/$path" \
+    "https://raw.githubusercontent.com/$path"
+}
+
+if [[ $DE_GWD_TEST_MODE != 1 && -f "/etc/apt/sources.list.d/debian.sources" ]]; then
+  mv -f "/etc/apt/sources.list.d/debian.sources" "/etc/apt/debian.sources.disabled"
+fi
 
 getTopDomain(){
 local host=${1%%:*}
@@ -30,6 +108,270 @@ root=$(echo "$host" | awk -F. '{print $(NF-1)"."$NF}')
 fi
 [[ "$host" == "$root" ]] && echo "$root" || echo "${host#*.}"
 }
+
+parseDomainPort(){
+local input=$1
+if [[ $input =~ ^\[([0-9A-Fa-f:.]+)\]:([1-9][0-9]{0,4})$ ]]; then
+printf '%s %s\n' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}"
+elif [[ $input =~ ^([A-Za-z0-9.-]+):([1-9][0-9]{0,4})$ ]]; then
+printf '%s %s\n' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}"
+elif [[ $input =~ ^[A-Za-z0-9.-]+$ ]]; then
+printf '%s\n' "$input"
+else
+return 1
+fi
+}
+
+formatDomainPort(){
+local host=$1
+local port=$2
+if [[ $host == *:* ]]; then
+  printf '[%s]:%s\n' "$host" "$port"
+else
+  printf '%s:%s\n' "$host" "$port"
+fi
+}
+
+removeLegacyVLESSWebConf(){
+local temp=/tmp/de_GWD.vless-nginx.$$.conf
+awk '
+function braceDelta(line, opens, closes, text) {
+  text=line
+  opens=gsub(/\{/, "", text)
+  text=line
+  closes=gsub(/\}/, "", text)
+  return opens-closes
+}
+BEGIN { inServer=0; depth=0; skip=0; block="" }
+{
+  if (!inServer && $0 ~ /^[[:space:]]*server[[:space:]]*\{[[:space:]]*$/) {
+    inServer=1
+    depth=braceDelta($0)
+    block=$0 ORS
+    next
+  }
+  if (inServer) {
+    block=block $0 ORS
+    if ($0 ~ /proxy_pass[[:space:]]+http:\/\/127\.0\.0\.1:9891;/) skip=1
+    depth+=braceDelta($0)
+    if (depth == 0) {
+      if (!skip) printf "%s", block
+      inServer=0
+      depth=0
+      skip=0
+      block=""
+    }
+    next
+  }
+  print
+}
+END { if (inServer && !skip) printf "%s", block }
+' "$DE_GWD_NGINX_CONF_DIR/default.conf" >"$temp" && mv -f "$temp" "$DE_GWD_NGINX_CONF_DIR/default.conf" || { rm -f "$temp"; return 1; }
+}
+
+getServerDomain(){
+local serverDomain=${domain:-}
+if [[ ! $serverDomain =~ ^[A-Za-z0-9.-]+$ ]]; then
+  serverDomain=$(awk '$1 == "server_name" && $2 != ";" {gsub(/;/, "", $2); print $2; exit}' "$DE_GWD_NGINX_CONF_DIR/default.conf" 2>/dev/null)
+fi
+if [[ ! $serverDomain =~ ^[A-Za-z0-9.-]+$ ]]; then
+  local settings
+  for settings in "$DE_GWD_DATA_DIR/vless.json" "$DE_GWD_DATA_DIR/reality.json" "$DE_GWD_DATA_DIR/socks5.json" "$DE_GWD_DATA_DIR/dokodemo.json"; do
+    serverDomain=$(jq -r '.domain // empty' "$settings" 2>/dev/null)
+    [[ $serverDomain =~ ^[A-Za-z0-9.-]+$ ]] && break
+  done
+fi
+[[ $serverDomain =~ ^[A-Za-z0-9.-]+$ ]] || return 1
+printf '%s\n' "$serverDomain"
+}
+
+xrayPortAvailable(){
+local candidate=$1
+local currentSettings=$2
+local settings usedPort mainPort currentPort
+mainPort=${port:-$(awk '$1 == "listen" && $2 ~ /^[1-9][0-9]{0,4}$/ && $3 == "default" {print $2; exit}' "$DE_GWD_NGINX_CONF_DIR/default.conf" 2>/dev/null)}
+[[ $candidate = "$mainPort" || $candidate = "9890" || $candidate = "9891" ]] && return 1
+currentPort=$(jq -r '.port // empty' "$currentSettings" 2>/dev/null)
+if [[ $candidate != "$currentPort" ]] && ss -H -lntu 2>/dev/null | awk -v candidate=":$candidate" '$4 ~ candidate "$" {found=1} END {exit !found}'; then
+  return 1
+fi
+for settings in "$DE_GWD_DATA_DIR/vless.json" "$DE_GWD_DATA_DIR/reality.json" "$DE_GWD_DATA_DIR/socks5.json" "$DE_GWD_DATA_DIR/dokodemo.json" "$DE_GWD_DATA_DIR/RproxyS/settings.json"; do
+  [[ $settings = "$currentSettings" || ! -f $settings ]] && continue
+  usedPort=$(jq -r '.port // empty' "$settings" 2>/dev/null)
+  [[ $candidate = "$usedPort" ]] && return 1
+done
+return 0
+}
+
+syncMainNodeState(){
+local currentDomain currentPort currentPath currentUUIDs
+currentDomain=$(awk '$1 == "server_name" && $2 != ";" {gsub(/;/, "", $2); print $2; exit}' "$DE_GWD_NGINX_CONF_DIR/default.conf" 2>/dev/null)
+[[ $currentDomain =~ ^[A-Za-z0-9.-]+$ ]] && domain=$currentDomain
+currentPort=$(awk '$1 == "listen" && $2 ~ /^[0-9]+$/ && $2 > 0 && $2 <= 65535 && $3 == "default" {print $2; exit}' "$DE_GWD_NGINX_CONF_DIR/default.conf" 2>/dev/null)
+if [[ $currentPort =~ ^[0-9]+$ ]] && (( currentPort > 0 && currentPort <= 65535 )); then
+  port=$currentPort
+fi
+currentPath=$(jq -r '.inbounds[0].streamSettings.wsSettings.path // empty' "$DE_GWD_XRAY_DIR/config.json" 2>/dev/null)
+[[ $currentPath == /* ]] && path=$currentPath
+currentUUIDs=$(jq -r '.inbounds[0].settings.clients[].id // empty' "$DE_GWD_XRAY_DIR/config.json" 2>/dev/null)
+uuids=$currentUUIDs
+}
+
+configLockAcquire(){
+local lockFile=${DE_GWD_CONFIG_LOCK:-/run/lock/de_GWD-config.lock}
+local lockDir=${lockFile%/*}
+[[ $lockDir = "$lockFile" ]] && lockDir="."
+command -v flock >/dev/null 2>&1 || {
+  echo "flock is required for configuration changes" >&2
+  return 1
+}
+mkdir -p -- "$lockDir" || return 1
+exec 9>"$lockFile" || return 1
+if ! flock -n 9; then
+  exec 9>&-
+  echo "another de_GWD configuration change is in progress" >&2
+  return 1
+fi
+}
+
+configLockRelease(){
+flock -u 9 >/dev/null 2>&1 || true
+exec 9>&-
+}
+
+configTxnStart(){
+local backupDir manifest file backup index=0
+backupDir=$(mktemp -d "${DE_GWD_TXN_TMPDIR:-/tmp}/de_GWD-config.XXXXXX") || return 1
+manifest="$backupDir/manifest"
+: >"$manifest" || { rm -rf -- "$backupDir"; return 1; }
+for file in "$@"; do
+  [[ -n $file ]] || continue
+  index=$((index + 1))
+  backup="$backupDir/$index"
+  if [[ -e $file || -L $file ]]; then
+    if ! cp -a -- "$file" "$backup"; then
+      rm -rf -- "$backupDir"
+      return 1
+    fi
+  else
+    backup="-"
+  fi
+  printf '%s\t%s\n' "$file" "$backup" >>"$manifest" || {
+    rm -rf -- "$backupDir"
+    return 1
+  }
+done
+DE_GWD_TXN_DIR=$backupDir
+DE_GWD_TXN_MANIFEST=$manifest
+}
+
+configTxnRestore(){
+local target backup
+[[ -f ${DE_GWD_TXN_MANIFEST:-} ]] || return 1
+while IFS=$'\t' read -r target backup; do
+  [[ -n $target ]] || continue
+  rm -rf -- "$target" || return 1
+  if [[ $backup != "-" ]]; then
+    mkdir -p -- "$(dirname -- "$target")" || return 1
+    cp -a -- "$backup" "$target" || return 1
+  fi
+done <"$DE_GWD_TXN_MANIFEST"
+}
+
+configTxnFinish(){
+local backupDir=${DE_GWD_TXN_DIR:-}
+DE_GWD_TXN_DIR=
+DE_GWD_TXN_MANIFEST=
+[[ -n $backupDir ]] && rm -rf -- "$backupDir"
+}
+
+configTxnRestartServices(){
+local service
+for service in $1; do
+  systemctl restart "$service" >/dev/null 2>&1 || return 1
+done
+}
+
+configTransaction(){
+local services=$1 callback=$2 file status restoreStatus
+local -a files=()
+shift 2
+while [[ ${1:-} != "--" ]]; do
+  [[ $# -gt 0 ]] || return 2
+  files+=("$1")
+  shift
+done
+shift
+
+if [[ -n ${DE_GWD_TXN_DIR:-} ]]; then
+  "$callback" "$@"
+  return $?
+fi
+
+configLockAcquire || return 1
+if ! configTxnStart "${files[@]}"; then
+  configLockRelease
+  return 1
+fi
+
+"$callback" "$@"
+status=$?
+if (( status != 0 )); then
+  restoreStatus=0
+  configTxnRestore || restoreStatus=$?
+  if (( restoreStatus == 0 )) && [[ -n $services ]]; then
+    configTxnRestartServices "$services" || restoreStatus=1
+  fi
+  (( restoreStatus == 0 )) || status=1
+fi
+configTxnFinish
+configLockRelease
+return "$status"
+}
+
+xrayValidateConfig(){
+"$DE_GWD_XRAY_BIN" run -test -confdir "$DE_GWD_XRAY_DIR" >/dev/null 2>&1
+}
+
+xrayReloadApply(){
+syncMainNodeState
+XrayInbound || return 1
+XrayOutboundDirect || return 1
+xrayValidateConfig || {
+  echo -e "${RED}Xray configuration test failed${cRES}" >&2
+  return 1
+}
+systemctl restart vtrui >/dev/null 2>&1 || return 1
+systemctl is-active --quiet vtrui
+}
+
+xrayApplyCandidate(){
+local settings=$1 candidate=$2
+mv -f -- "$candidate" "$settings" || return 1
+XrayReload
+}
+
+xrayRemoveSettings(){
+local settings=$1
+rm -f -- "$settings" || return 1
+XrayReload
+}
+
+xrayConfigTransaction(){
+local callback=$1
+shift
+configTransaction "vtrui" "$callback" \
+  "$DE_GWD_XRAY_DIR/config.json" \
+  "$DE_GWD_DATA_DIR/vless.json" \
+  "$DE_GWD_DATA_DIR/reality.json" \
+  "$DE_GWD_DATA_DIR/socks5.json" \
+  "$DE_GWD_DATA_DIR/dokodemo.json" \
+  -- "$@"
+}
+
+if [[ $DE_GWD_TEST_MODE != 1 && -f "/etc/nginx/conf.d/default.conf" ]]; then
+  sed -i 's/fastopen=128/fastopen=500/g' /etc/nginx/conf.d/default.conf
+fi
 
 
 
@@ -55,6 +397,7 @@ unset aptPKG
 [[ -z $(dpkg -l | awk '{print$2}' | grep '^resolvconf$') ]] && aptPKG+=(resolvconf)
 [[ -z $(dpkg -l | awk '{print$2}' | grep '^nftables$') ]] && aptPKG+=(nftables)
 [[ -z $(dpkg -l | awk '{print$2}' | grep '^ca-certificates$') ]] && aptPKG+=(ca-certificates)
+[[ -z $(dpkg -l | awk '{print$2}' | grep '^cron$') ]] && aptPKG+=(cron)
 [[ -z $(dpkg -l | awk '{print$2}' | grep '^apt-transport-https$') ]] && aptPKG+=(apt-transport-https)
 [[ -z $(dpkg -l | awk '{print$2}' | grep '^gnupg2$') ]] && aptPKG+=(gnupg2)
 [[ -z $(dpkg -l | awk '{print$2}' | grep '^unzip$') ]] && aptPKG+=(unzip)
@@ -72,7 +415,11 @@ unset aptPKG
 [[ -z $(dpkg -l | awk '{print$2}' | grep '^unbound$') ]] && aptPKG+=(unbound)
 [[ -z $(dpkg -l | awk '{print$2}' | grep '^libmimalloc2.0') ]] && aptPKG+=(libmimalloc2.0)
 [[ -z $(dpkg -l | awk '{print$2}' | grep '^irqbalance$') ]] && [[ $(nproc --all) -gt 1 ]] && aptPKG+=(irqbalance)
-[[ -n $aptPKG ]] && apt update && apt install $(echo ${aptPKG[@]})
+if [[ -n $aptPKG ]]; then
+apt update && apt install -y "${aptPKG[@]}" || return 1
+fi
+systemctl enable --now cron >/dev/null 2>&1 || return 1
+return 0
 }
 
 
@@ -90,53 +437,53 @@ fi
 
 repoDL(){
 echo -e "${WHITE}[...]\c" && echo -e "\t${WHITE}Repository${cRES}\r\c"
-sha256sum_de_GWD=$(curl -fsSLo- https://raw.githubusercontent.com/jacyl4/de_GWD/$branch/de_GWD_"$architecture".zip.sha256sum)
-sha256sum_don_server=$(curl -fsSLo- https://raw.githubusercontent.com/jacyl4/de_GWD/$branch/resource/doh/doh_s_"$architecture".sha256sum)
-sha256sum_nginx=$(curl -fsSLo- https://raw.githubusercontent.com/jacyl4/de_GWD/$branch/resource/nginx/nginx_"$architecture".sha256sum)
-sha256sum_nginxConf=$(curl -fsSLo- https://raw.githubusercontent.com/jacyl4/de_GWD/$branch/resource/nginx/nginxConf.zip.sha256sum)
-sha256sum_sample=$(curl -fsSLo- https://raw.githubusercontent.com/jacyl4/de_GWD/$branch/resource/server/sample.zip.sha256sum)
+sha256sum_de_GWD=$(curl -fsSLo- https://raw.githubusercontent.com/stuinx/deGWD/$branch/de_GWD_"$architecture".zip.sha256sum)
+sha256sum_don_server=$(curl -fsSLo- https://raw.githubusercontent.com/stuinx/deGWD/$branch/resource/doh/doh_s_"$architecture".sha256sum)
+sha256sum_nginx=$(curl -fsSLo- https://raw.githubusercontent.com/stuinx/deGWD/$branch/resource/nginx/nginx_"$architecture".sha256sum)
+sha256sum_nginxConf=$(curl -fsSLo- https://raw.githubusercontent.com/stuinx/deGWD/$branch/resource/nginx/nginxConf.zip.sha256sum)
+sha256sum_sample=$(curl -fsSLo- https://raw.githubusercontent.com/stuinx/deGWD/$branch/resource/server/sample.zip.sha256sum)
 
 if [[ $(checkSum /opt/de_GWD/doh-server $sha256sum_don_server) = "false" ]]; then
 rm -rf /tmp/doh-server
-wget --show-progress -cqO /tmp/doh-server https://raw.githubusercontent.com/jacyl4/de_GWD/$branch/resource/doh/doh_s_$architecture
+wget --show-progress -cqO /tmp/doh-server https://raw.githubusercontent.com/stuinx/deGWD/$branch/resource/doh/doh_s_$architecture
 [[ $(checkSum /tmp/doh-server $sha256sum_don_server) = "false" ]] && echo -e "${RED}Download Failed${cRES}" && exit
 [[ $(checkSum /tmp/doh-server $sha256sum_don_server) = "true" ]] && mv -f /tmp/doh-server /opt/de_GWD/doh-server && chmod +x /opt/de_GWD/doh-server
 fi
 
 if [[ $(checkSum /usr/sbin/nginx $sha256sum_nginx) = "false" ]]; then
 rm -rf /tmp/nginx
-wget --show-progress -cqO /tmp/nginx https://raw.githubusercontent.com/jacyl4/de_GWD/$branch/resource/nginx/nginx_"$architecture"
+wget --show-progress -cqO /tmp/nginx https://raw.githubusercontent.com/stuinx/deGWD/$branch/resource/nginx/nginx_"$architecture"
 [[ $(checkSum /tmp/nginx $sha256sum_nginx) = "false" ]] && echo -e "${RED}Download Failed${cRES}" && exit
 [[ $(checkSum /tmp/nginx $sha256sum_nginx) = "true" ]] && mv -f /tmp/nginx /usr/sbin/nginx && chmod +x /usr/sbin/nginx
 fi
 
 if [[ $(checkSum /opt/de_GWD/.repo/de_GWD.zip $sha256sum_de_GWD) = "false" ]]; then
 rm -rf /tmp/de_GWD.zip
-wget --show-progress -cqO /tmp/de_GWD.zip https://raw.githubusercontent.com/jacyl4/de_GWD/$branch/de_GWD_"$architecture".zip
+wget --show-progress -cqO /tmp/de_GWD.zip https://raw.githubusercontent.com/stuinx/deGWD/$branch/de_GWD_"$architecture".zip
 [[ $(checkSum /tmp/de_GWD.zip $sha256sum_de_GWD) = "false" ]] && echo -e "${RED}Download Failed${cRES}" && exit
 [[ $(checkSum /tmp/de_GWD.zip $sha256sum_de_GWD) = "true" ]] && mv -f /tmp/de_GWD.zip /opt/de_GWD/.repo/de_GWD.zip
 fi
 
 if [[ $(checkSum /opt/de_GWD/.repo/nginxConf.zip $sha256sum_nginxConf) = "false" ]]; then
 rm -rf /tmp/nginxConf.zip
-wget --show-progress -cqO /tmp/nginxConf.zip https://raw.githubusercontent.com/jacyl4/de_GWD/$branch/resource/nginx/nginxConf.zip
+wget --show-progress -cqO /tmp/nginxConf.zip https://raw.githubusercontent.com/stuinx/deGWD/$branch/resource/nginx/nginxConf.zip
 [[ $(checkSum /tmp/nginxConf.zip $sha256sum_nginxConf) = "false" ]] && echo -e "${RED}Download Failed${cRES}" && exit
 [[ $(checkSum /tmp/nginxConf.zip $sha256sum_nginxConf) = "true" ]] && mv -f /tmp/nginxConf.zip /opt/de_GWD/.repo/nginxConf.zip
 fi
 
 if [[ $(checkSum /opt/de_GWD/.repo/sample.zip $sha256sum_sample) = "false" ]]; then
 rm -rf /tmp/sample.zip
-wget --show-progress -cqO /tmp/sample.zip https://raw.githubusercontent.com/jacyl4/de_GWD/$branch/resource/server/sample.zip
+wget --show-progress -cqO /tmp/sample.zip https://raw.githubusercontent.com/stuinx/deGWD/$branch/resource/server/sample.zip
 [[ $(checkSum /tmp/sample.zip $sha256sum_sample) = "false" ]] && echo -e "${RED}Download Failed${cRES}" && exit
 [[ $(checkSum /tmp/sample.zip $sha256sum_sample) = "true" ]] && mv -f /tmp/sample.zip /opt/de_GWD/.repo/sample.zip
 fi
 
 localVer=$(awk 'NR==1' /opt/de_GWD/version.php 2>/dev/null)
-remoteVer=$(curl -fsSLo- https://raw.githubusercontent.com/jacyl4/de_GWD/main/version.php | head -n 1)
+remoteVer=$(curl -fsSLo- https://raw.githubusercontent.com/stuinx/deGWD/main/version.php | head -n 1)
 
 if [[ $localVer != $remoteVer ]]; then
 rm -rf /tmp/version.php
-wget --show-progress -cqO /tmp/version.php https://raw.githubusercontent.com/jacyl4/de_GWD/main/version.php
+wget --show-progress -cqO /tmp/version.php https://raw.githubusercontent.com/stuinx/deGWD/main/version.php
 [[ $? -ne 0 ]] && echo -e "${WHITE}Version File${RED} Download Failed${cRES}" && exit
 [[ $(du -sk /tmp/version.php 2>/dev/null | awk '{print$1}') -ge 4 ]] && mv -f /tmp/version.php /opt/de_GWD/version.php
 fi
@@ -147,6 +494,10 @@ echo -e "${WHITE}[ ${GREEN}✓ ${WHITE}]\c" && echo -e "\t${WHITE}Repository${cR
 
 
 preUpdate(){
+if [[ -f "/opt/de_GWD/RproxyS/settings.json" ]]; then
+  systemctl disable --now RproxyS >/dev/null 2>&1 || true
+fi
+
 [[ -f "/etc/nginx/conf.d/HSTS" ]] && rm -rf /etc/nginx/conf.d/HSTS
 [[ -f "/etc/nginx/conf.d/ssl_certificate" ]] && rm -rf /etc/nginx/conf.d/ssl_certificate
 
@@ -205,14 +556,19 @@ rm -rf /etc/systemd/system/rc_online.service
 systemctl daemon-reload >/dev/null
 fi
 
-service cron stop
+if ! command -v crontab >/dev/null 2>&1; then
+  apt update && apt install -y cron || return 1
+fi
+systemctl enable --now cron >/dev/null 2>&1 || return 1
+systemctl stop cron >/dev/null 2>&1 || return 1
 
 ethernetnum=$(find /sys/class/net ! -type d | xargs --max-args=1 realpath | grep 'device' | xargs -n 1 | grep -v 'virtual' | grep -v 'ifb' | awk -F'/' '{print$NF}' | head -n1)
 localAddrCIDR=$(ip -4 a | grep "$ethernetnum" | grep -Po '\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}/\d{1,2}\b' | head -n 1)
 localAddr=$(echo $localAddrCIDR | cut -d/ -f1)
 
 domain=$(awk '/server_name/ {print$2;exit}' /etc/nginx/conf.d/default.conf | sed 's/.$//')
-topDomain=$(echo $domain | rev | awk -F. '{print $1"."$2}' | rev)
+topDomain=$(getTopDomain "$domain")
+[[ $topDomain != *.* ]] && topDomain=""
 port=$(awk '/ssl .* reuseport/ {print$2}' /etc/nginx/conf.d/default.conf | grep '^[[:digit:]]*$' | head -n1)
 [[ -z $port ]] && port="443"
 
@@ -361,7 +717,7 @@ EOF
 apt update --fix-missing && apt upgrade --allow-downgrades -y
 apt full-upgrade -y && apt autoremove --purge -y && apt clean -y && apt autoclean -y
 
-pkgDEP
+pkgDEP || exit 1
 
 cat << EOF >/etc/default/rng-tools-debian
 # -*- mode: sh -*-
@@ -1083,12 +1439,40 @@ echo -e "${WHITE}[ ${GREEN}✓ ${WHITE}]\c" && echo -e "\t${WHITE}Install NGINX$
 
 
 
-makeSSL_D(){
-crontab -l 2>/dev/null >/tmp/now.cron
-sed -i '/acme.sh/d' /tmp/now.cron
-crontab /tmp/now.cron
-rm -rf /tmp/now.cron
+acmeSetup(){
+if [[ ! -x "/root/.acme.sh/acme.sh" ]]; then
+  acmeScript=/tmp/de_GWD-acme.sh
+  rm -f "$acmeScript"
+  if ! curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors -o "$acmeScript" https://get.acme.sh ||
+     ! sh "$acmeScript" ||
+     [[ ! -x "/root/.acme.sh/acme.sh" ]]; then
+    rm -f "$acmeScript"
+    echo -e "${WHITE}acme.sh${RED} Install Failed${cRES}"
+    return 1
+  fi
+  rm -f "$acmeScript"
+fi
+"/root/.acme.sh"/acme.sh --upgrade --auto-upgrade || return 1
+"/root/.acme.sh"/acme.sh --set-default-ca --server letsencrypt || return 1
+}
 
+
+
+sslDeploy(){
+if [[ ! -s "/var/www/ssl/de_GWD.cer" ]] || [[ ! -s "/var/www/ssl/de_GWD.key" ]] ||
+   ! openssl x509 -in /var/www/ssl/de_GWD.cer -noout >/dev/null 2>&1 ||
+   ! openssl x509 -in /var/www/ssl/de_GWD.cer -checkhost "$domain" -noout >/dev/null 2>&1; then
+  echo -e "${WHITE}TLS certificate${RED} Install Failed${cRES}"
+  return 1
+fi
+chmod 644 /var/www/ssl/*.key || return 1
+nginx -t >/dev/null 2>&1 || return 1
+systemctl force-reload nginx || return 1
+}
+
+
+
+makeSSL_D(){
 export CF_Key="$CFapikey"
 export CF_Email="$CFemail"
 
@@ -1103,44 +1487,24 @@ else
 systemctl force-reload nginx
 fi
 
-find /var/www/ssl/*.pem | grep -v "dhparam.pem" | xargs -I {} rm -rf {}
-
-curl https://get.acme.sh | sh
-"/root/.acme.sh"/acme.sh --upgrade  --auto-upgrade
-"/root/.acme.sh"/acme.sh --set-default-ca  --server letsencrypt
-if [[ $domain == "$topDomain" ]]; then
-certDomains=(-d "$domain")
-certName="$domain"
+acmeSetup || return 1
+if [[ -n $topDomain ]]; then
+  "/root/.acme.sh"/acme.sh --issue --dns dns_cf -d "$domain" -d "*.$topDomain" -k ec-256 --dnssleep 180 || return 1
 else
-certDomains=(-d "*.$topDomain")
-certName="*.$topDomain"
+  "/root/.acme.sh"/acme.sh --issue --dns dns_cf -d "$domain" -k ec-256 --dnssleep 180 || return 1
 fi
-if ! "/root/.acme.sh"/acme.sh --issue --force --dns dns_cf "${certDomains[@]}" -k ec-256 --dnssleep 180; then
-echo -e "${WHITE}[ ${RED}✕ ${WHITE}]\c" && echo -e "\t${WHITE}SSL certificate issue failed${cRES}"
-return 1
-fi
-if ! "/root/.acme.sh"/acme.sh --installcert -d "$certName" \
+"/root/.acme.sh"/acme.sh --installcert -d "$domain" \
                --key-file       /var/www/ssl/de_GWD.key  \
                --fullchain-file /var/www/ssl/de_GWD.cer \
                --reloadcmd     "systemctl force-reload nginx" \
-               --ecc
-then
-echo -e "${WHITE}[ ${RED}✕ ${WHITE}]\c" && echo -e "\t${WHITE}SSL certificate install failed${cRES}"
-return 1
-fi
+               --ecc || return 1
 
-[[ -s /var/www/ssl/de_GWD.key && -s /var/www/ssl/de_GWD.cer ]] || return 1
-chmod 600 /var/www/ssl/de_GWD.key
+sslDeploy || return 1
 }
 
 
 
 makeSSL_W(){
-crontab -l 2>/dev/null >/tmp/now.cron
-sed -i '/acme.sh/d' /tmp/now.cron
-crontab /tmp/now.cron
-rm -rf /tmp/now.cron
-
 rm -rf /etc/nginx/conf.d/80.conf
 rm -rf /etc/nginx/conf.d/default.conf
 cat << EOF >/etc/nginx/conf.d/default.conf
@@ -1165,34 +1529,45 @@ else
 systemctl force-reload nginx
 fi
 
-find /var/www/ssl/*.pem | grep -v "dhparam.pem" | xargs -I {} rm -rf {}
-
-curl https://get.acme.sh | sh
-"/root/.acme.sh"/acme.sh --upgrade  --auto-upgrade
-"/root/.acme.sh"/acme.sh --set-default-ca  --server letsencrypt
-if ! "/root/.acme.sh"/acme.sh --issue --force -d "$domain" -w /var/www/html -k ec-256; then
-echo -e "${WHITE}[ ${RED}✕ ${WHITE}]\c" && echo -e "\t${WHITE}SSL certificate issue failed${cRES}"
-return 1
-fi
-if ! "/root/.acme.sh"/acme.sh --installcert -d "$domain" \
+acmeSetup || return 1
+"/root/.acme.sh"/acme.sh --issue -d "$domain" -w /var/www/html -k ec-256 || return 1
+"/root/.acme.sh"/acme.sh --installcert -d "$domain" \
                --key-file       /var/www/ssl/de_GWD.key  \
                --fullchain-file /var/www/ssl/de_GWD.cer \
                --reloadcmd     "systemctl force-reload nginx" \
-               --ecc
-then
-echo -e "${WHITE}[ ${RED}✕ ${WHITE}]\c" && echo -e "\t${WHITE}SSL certificate install failed${cRES}"
-return 1
-fi
+               --ecc || return 1
 
-[[ -s /var/www/ssl/de_GWD.key && -s /var/www/ssl/de_GWD.cer ]] || return 1
-chmod 600 /var/www/ssl/de_GWD.key
+sslDeploy || return 1
 }
 
 
 
 nginxWebConf(){
+local nginxConfDir=${DE_GWD_NGINX_CONF_DIR:-/etc/nginx/conf.d}
+if [[ ! $domain =~ ^[A-Za-z0-9.-]+$ ]]; then
+  domain=$(getServerDomain 2>/dev/null) || { echo -e "${RED}Server domain is unavailable${cRES}"; return 1; }
+fi
+if [[ ! $port =~ ^[1-9][0-9]{0,4}$ ]] || (( port > 65535 )); then
+  port=$(awk '$1 == "listen" && $2 ~ /^[1-9][0-9]{0,4}$/ && $3 == "default" {print $2; exit}' "$nginxConfDir/default.conf" 2>/dev/null)
+  port=${port:-443}
+fi
+if [[ $path != /* ]]; then
+path=$(jq -r '.inbounds[0].streamSettings.wsSettings.path // empty' "$DE_GWD_XRAY_DIR/config.json" 2>/dev/null)
+fi
+if [[ $path != /* ]]; then
+  echo -e "${RED}Xray WebSocket path is unavailable${cRES}"
+  return 1
+fi
+local configuredVlessPort
+if [[ $(jq -r '.enabled // false' "$DE_GWD_DATA_DIR/vless.json" 2>/dev/null) = "true" ]]; then
+  configuredVlessPort=$(jq -r '.port // empty' "$DE_GWD_DATA_DIR/vless.json" 2>/dev/null)
+  if [[ $configuredVlessPort = "$port" ]]; then
+    echo -e "${RED}VLESS port conflicts with the base Nginx port${cRES}"
+    return 1
+  fi
+fi
 if [[ $port = "443" ]]; then
-cat << EOF >/etc/nginx/conf.d/80.conf
+cat << EOF >"$DE_GWD_NGINX_CONF_DIR/80.conf"
 server {
   listen 80 reuseport;
   server_name $domain;
@@ -1200,24 +1575,26 @@ server {
 }
 EOF
 else
-rm -rf /etc/nginx/conf.d/80.conf
+rm -rf "$DE_GWD_NGINX_CONF_DIR/80.conf"
 fi
 
-touch /etc/nginx/conf.d/default.conf
-sed -i '/SERVER_BASE_START/,/SERVER_BASE_END/d' /etc/nginx/conf.d/default.conf
-sed -i '/DOH_START/,/DOH_END/d' /etc/nginx/conf.d/default.conf
-sed -i '/V2_START/,/V2_END/d' /etc/nginx/conf.d/default.conf
-sed -i '$s/}$//' /etc/nginx/conf.d/default.conf
+touch "$DE_GWD_NGINX_CONF_DIR/default.conf"
+sed -i '/VLESS_START/,/VLESS_END/d' "$DE_GWD_NGINX_CONF_DIR/default.conf"
+removeLegacyVLESSWebConf || return 1
+sed -i '/SERVER_BASE_START/,/SERVER_BASE_END/d' "$DE_GWD_NGINX_CONF_DIR/default.conf"
+sed -i '/DOH_START/,/DOH_END/d' "$DE_GWD_NGINX_CONF_DIR/default.conf"
+sed -i '/V2_START/,/V2_END/d' "$DE_GWD_NGINX_CONF_DIR/default.conf"
+sed -i '$s/}$//' "$DE_GWD_NGINX_CONF_DIR/default.conf"
 
-until [[ $(head -1 /etc/nginx/conf.d/default.conf | cat -e) != "$" ]]; do
-   sed -i '1d' /etc/nginx/conf.d/default.conf
+until [[ $(head -1 "$DE_GWD_NGINX_CONF_DIR/default.conf" | cat -e) != "$" ]]; do
+   sed -i '1d' "$DE_GWD_NGINX_CONF_DIR/default.conf"
 done
 
-until [[ $(tail -1 /etc/nginx/conf.d/default.conf | cat -e) != "$" ]]; do
-   sed -i '$d' /etc/nginx/conf.d/default.conf
+until [[ $(tail -1 "$DE_GWD_NGINX_CONF_DIR/default.conf" | cat -e) != "$" ]]; do
+   sed -i '$d' "$DE_GWD_NGINX_CONF_DIR/default.conf"
 done
 
-cat << EOF >/etc/nginx/conf.d/.HSTS
+cat << EOF >"$nginxConfDir/.HSTS"
 add_header X-Download-Options                 "noopen"            always;
 add_header X-Permitted-Cross-Domain-Policies  "none"              always;
 add_header X-Robots-Tag                       "none"              always;
@@ -1228,7 +1605,7 @@ add_header X-Frame-Options                    "SAMEORIGIN"        always;
 add_header X-Content-Type-Options             "nosniff"           always;
 EOF
 
-cat << EOF >/etc/nginx/conf.d/.ssl_certs
+cat << EOF >"$nginxConfDir/.ssl_certs"
 ssl_certificate /var/www/ssl/de_GWD.cer;
 ssl_certificate_key /var/www/ssl/de_GWD.key;
 ssl_dhparam /var/www/ssl/dhparam.pem;
@@ -1249,7 +1626,44 @@ ssl_early_data on;
 proxy_set_header Early-Data \$ssl_early_data;
 EOF
 
-cat << EOF >/etc/nginx/conf.d/default.conf
+local vlessWebConf=""
+local vlessDomain
+local vlessPath
+local vlessPort
+if [[ $(jq -r '.enabled // false' "$DE_GWD_DATA_DIR/vless.json" 2>/dev/null) = "true" ]]; then
+  vlessDomain=$(jq -r '.domain // empty' "$DE_GWD_DATA_DIR/vless.json" 2>/dev/null)
+  vlessPath=$(jq -r '.path // empty' "$DE_GWD_DATA_DIR/vless.json" 2>/dev/null)
+  vlessPort=$(jq -r '.port // empty' "$DE_GWD_DATA_DIR/vless.json" 2>/dev/null)
+  vlessWebConf=$(cat << EOF
+server {
+  listen $vlessPort ssl fastopen=500 reuseport;
+  server_name $vlessDomain;
+
+  include $nginxConfDir/.HSTS;
+  include $nginxConfDir/.ssl_certs;
+
+  location $vlessPath {
+    if (\$http_upgrade != "websocket") { return 404; }
+    proxy_pass http://127.0.0.1:9891;
+    proxy_http_version 1.1;
+    proxy_set_header Host \$host;
+    proxy_set_header Upgrade "websocket";
+    proxy_set_header Connection "upgrade";
+    proxy_set_header X-Real-IP \$remote_addr;
+    proxy_set_header X-Real-PORT \$remote_port;
+    proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+    proxy_connect_timeout 600;
+    proxy_read_timeout 600;
+    proxy_send_timeout 600;
+    proxy_redirect off;
+    proxy_buffering off;
+  }
+}
+EOF
+)
+fi
+
+cat << EOF >"$DE_GWD_NGINX_CONF_DIR/default.conf"
 # SERVER_BASE_START
 upstream xray {
     server 127.0.0.1:9890;
@@ -1267,12 +1681,12 @@ server {
 
   add_header Alt-Svc 'h3=":443";ma=86400,quic=":443"; ma=2592000; v="46,43"';
 
-  include /etc/nginx/conf.d/.HSTS;
+  include $nginxConfDir/.HSTS;
 
   add_header Referrer-Policy                    "origin"            always;
   add_header Pragma                             "no-cache"          always;
 
-  include /etc/nginx/conf.d/.ssl_certs;
+  include $nginxConfDir/.ssl_certs;
 
 # SERVER_BASE_END
 
@@ -1323,15 +1737,18 @@ location $path {
 }
 # V2_END
 
-$(cat /etc/nginx/conf.d/default.conf 2>/dev/null)
+$(cat "$DE_GWD_NGINX_CONF_DIR/default.conf" 2>/dev/null)
 }
+# VLESS_START
+$vlessWebConf
+# VLESS_END
 EOF
 }
 
 
 
 XrayInbound(){
-cat << EOF >/opt/de_GWD/vtrui/config.json
+cat << EOF >"$DE_GWD_XRAY_DIR/config.json"
 {
   "log": {
     "access":"none",
@@ -1381,8 +1798,83 @@ EOF
 
 for uuid in $uuids; do
 uuidStr='{"id": "'$uuid'", "alterId":0}'
-jq --argjson uuidStr "$uuidStr" '.inbounds[0].settings.clients+=[$uuidStr]' /opt/de_GWD/vtrui/config.json | sponge /opt/de_GWD/vtrui/config.json
+jq --argjson uuidStr "$uuidStr" '.inbounds[0].settings.clients+=[$uuidStr]' "$DE_GWD_XRAY_DIR/config.json" | sponge "$DE_GWD_XRAY_DIR/config.json"
 done
+
+if [[ $(jq -r '.enabled // false' "$DE_GWD_DATA_DIR/vless.json" 2>/dev/null) = "true" ]]; then
+local vlessPort=$(jq -r '.port // empty' "$DE_GWD_DATA_DIR/vless.json" 2>/dev/null)
+[[ $vlessPort =~ ^[1-9][0-9]{0,4}$ ]] && (( vlessPort <= 65535 )) || return 1
+local vlessPath=$(jq -r '.path // empty' "$DE_GWD_DATA_DIR/vless.json" 2>/dev/null)
+local vlessUUID=$(jq -r '.uuid // empty' "$DE_GWD_DATA_DIR/vless.json" 2>/dev/null)
+[[ -n $vlessPath && $vlessPath == /* && -n $vlessUUID ]] || return 1
+local vlessInbound
+vlessInbound=$(cat << EOF
+{
+  "tag":"vless-ws",
+  "listen":"127.0.0.1",
+  "port":9891,
+  "protocol":"vless",
+  "settings":{
+    "clients":[],
+    "decryption":"none"
+  },
+  "streamSettings":{
+    "network":"ws",
+    "security":"none",
+    "wsSettings":{"path":"$vlessPath"},
+    "sockopt":{"tcpFastOpen":true,"tcpMptcp":true}
+  },
+  "sniffing":{
+    "enabled":true,
+    "destOverride":["http","tls","quic"]
+  }
+}
+EOF
+)
+jq --argjson vlessInbound "$vlessInbound" '.inbounds += [$vlessInbound]' "$DE_GWD_XRAY_DIR/config.json" | sponge "$DE_GWD_XRAY_DIR/config.json"
+jq --arg id "$vlessUUID" '.inbounds[-1].settings.clients += [{"id":$id,"flow":""}]' "$DE_GWD_XRAY_DIR/config.json" | sponge "$DE_GWD_XRAY_DIR/config.json"
+fi
+
+if [[ $(jq -r '.enabled // false' "$DE_GWD_DATA_DIR/reality.json" 2>/dev/null) = "true" ]]; then
+local realityPort=$(jq -r '.port // empty' "$DE_GWD_DATA_DIR/reality.json" 2>/dev/null)
+local realityUUID=$(jq -r '.uuid // empty' "$DE_GWD_DATA_DIR/reality.json" 2>/dev/null)
+local realityFlow=$(jq -r '.flow // empty' "$DE_GWD_DATA_DIR/reality.json" 2>/dev/null)
+local realityDest=$(jq -r '.dest // empty' "$DE_GWD_DATA_DIR/reality.json" 2>/dev/null)
+local realityServerName=$(jq -r '.serverName // empty' "$DE_GWD_DATA_DIR/reality.json" 2>/dev/null)
+local realityPrivateKey=$(jq -r '.privateKey // empty' "$DE_GWD_DATA_DIR/reality.json" 2>/dev/null)
+local realityShortId=$(jq -r '.shortId // empty' "$DE_GWD_DATA_DIR/reality.json" 2>/dev/null)
+[[ $realityPort =~ ^[1-9][0-9]{0,4}$ ]] && (( realityPort <= 65535 )) || return 1
+[[ $realityUUID =~ ^[0-9a-fA-F-]{36}$ && -n $realityFlow && -n $realityDest && -n $realityServerName && -n $realityPrivateKey ]] || return 1
+[[ $realityShortId =~ ^[0-9a-fA-F]{2,16}$ ]] || return 1
+jq --argjson port "$realityPort" --arg uuid "$realityUUID" --arg flow "$realityFlow" --arg dest "$realityDest" --arg serverName "$realityServerName" --arg privateKey "$realityPrivateKey" --arg shortId "$realityShortId" \
+  '.inbounds += [{tag:"vless-reality",listen:"0.0.0.0",port:$port,protocol:"vless",settings:{clients:[{id:$uuid,flow:$flow}],decryption:"none"},streamSettings:{network:"tcp",security:"reality",realitySettings:{show:false,dest:$dest,xver:0,serverNames:[$serverName],privateKey:$privateKey,shortIds:[$shortId]},sockopt:{tcpFastOpen:true,tcpMptcp:true}}}]' \
+  "$DE_GWD_XRAY_DIR/config.json" | sponge "$DE_GWD_XRAY_DIR/config.json"
+fi
+
+if [[ $(jq -r '.enabled // false' "$DE_GWD_DATA_DIR/socks5.json" 2>/dev/null) = "true" ]]; then
+local socksPort=$(jq -r '.port // empty' "$DE_GWD_DATA_DIR/socks5.json" 2>/dev/null)
+local socksUser=$(jq -r '.user // empty' "$DE_GWD_DATA_DIR/socks5.json" 2>/dev/null)
+local socksPassword=$(jq -r '.password // empty' "$DE_GWD_DATA_DIR/socks5.json" 2>/dev/null)
+[[ $socksPort =~ ^[1-9][0-9]{0,4}$ ]] && (( socksPort <= 65535 )) || return 1
+[[ -n $socksUser && -n $socksPassword ]] || return 1
+jq --argjson port "$socksPort" --arg user "$socksUser" --arg password "$socksPassword" \
+  '.inbounds += [{tag:"socks5",listen:"0.0.0.0",port:$port,protocol:"socks",settings:{auth:"password",users:[{user:$user,pass:$password}],udp:false}}]' \
+  "$DE_GWD_XRAY_DIR/config.json" | sponge "$DE_GWD_XRAY_DIR/config.json"
+fi
+
+if [[ $(jq -r '.enabled // false' "$DE_GWD_DATA_DIR/dokodemo.json" 2>/dev/null) = "true" ]]; then
+local dokodemoPort=$(jq -r '.port // empty' "$DE_GWD_DATA_DIR/dokodemo.json" 2>/dev/null)
+local dokodemoTarget=$(jq -r '.target // empty' "$DE_GWD_DATA_DIR/dokodemo.json" 2>/dev/null)
+local dokodemoTargetPort=$(jq -r '.targetPort // empty' "$DE_GWD_DATA_DIR/dokodemo.json" 2>/dev/null)
+local dokodemoNetwork=$(jq -r '.network // empty' "$DE_GWD_DATA_DIR/dokodemo.json" 2>/dev/null)
+[[ $dokodemoPort =~ ^[1-9][0-9]{0,4}$ ]] && (( dokodemoPort <= 65535 )) || return 1
+[[ $dokodemoTarget =~ ^[A-Za-z0-9.-]+$ || $dokodemoTarget =~ ^[0-9A-Fa-f:.]+$ ]] || return 1
+[[ $dokodemoTargetPort =~ ^[1-9][0-9]{0,4}$ ]] && (( dokodemoTargetPort <= 65535 )) || return 1
+[[ $dokodemoNetwork = "tcp" || $dokodemoNetwork = "udp" || $dokodemoNetwork = "tcp,udp" ]] || return 1
+jq --argjson port "$dokodemoPort" --arg target "$dokodemoTarget" --argjson targetPort "$dokodemoTargetPort" --arg network "$dokodemoNetwork" \
+  '.inbounds += [{tag:"dokodemo-door",listen:"0.0.0.0",port:$port,protocol:"dokodemo-door",settings:{address:$target,port:$targetPort,network:$network}}]' \
+  "$DE_GWD_XRAY_DIR/config.json" | sponge "$DE_GWD_XRAY_DIR/config.json"
+fi
 }
 
 
@@ -1406,9 +1898,19 @@ OBblo=`cat << EOF
 EOF
 `
 
-jq '.outbounds=[]' /opt/de_GWD/vtrui/config.json |\
+jq '.outbounds=[]' "$DE_GWD_XRAY_DIR/config.json" |\
 jq --argjson OBdir "$OBdir" '.outbounds+=[$OBdir]' |\
-jq --argjson OBblo "$OBblo" '.outbounds+=[$OBblo]' | sponge /opt/de_GWD/vtrui/config.json
+jq --argjson OBblo "$OBblo" '.outbounds+=[$OBblo]' | sponge "$DE_GWD_XRAY_DIR/config.json"
+}
+
+XrayReload(){
+configTransaction "vtrui" xrayReloadApply \
+  "$DE_GWD_XRAY_DIR/config.json" \
+  "$DE_GWD_DATA_DIR/vless.json" \
+  "$DE_GWD_DATA_DIR/reality.json" \
+  "$DE_GWD_DATA_DIR/socks5.json" \
+  "$DE_GWD_DATA_DIR/dokodemo.json" \
+  --
 }
 
 
@@ -1452,15 +1954,16 @@ chmod +x /opt/de_GWD/Q2H
 
 cat << "EOF" >/opt/de_GWD/Qday
 #!/bin/bash
-if [[ -n $(openssl x509 -enddate -noout -in /var/www/ssl/de_GWD.cer -checkend 259200 | grep "Certificate will expire") ]] && [[ -d "/root/.acme.sh" ]]; then
-"/root/.acme.sh"/acme.sh --set-default-ca  --server letsencrypt
-"/root/.acme.sh"/acme.sh --cron --force --home "/root/.acme.sh"
-
-sslFolder=$(ls "/root/.acme.sh" | grep '_ecc')
-cp -f "/root/.acme.sh"/$sslFolder/fullchain.cer /var/www/ssl/de_GWD.cer
-cp -f "/root/.acme.sh"/$sslFolder/*.key /var/www/ssl/de_GWD.key
-
-chmod 644 /var/www/ssl/*.key
+if [[ -n $(openssl x509 -enddate -noout -in /var/www/ssl/de_GWD.cer -checkend 259200 | grep "Certificate will expire") ]] && [[ -x "/root/.acme.sh/acme.sh" ]]; then
+sslDomain=$(awk '/server_name/ {print $2; exit}' /etc/nginx/conf.d/default.conf | sed 's/.$//')
+if "/root/.acme.sh"/acme.sh --set-default-ca --server letsencrypt &&
+   "/root/.acme.sh"/acme.sh --cron --force --home "/root/.acme.sh" &&
+   "/root/.acme.sh"/acme.sh --installcert -d "$sslDomain" \
+     --key-file /var/www/ssl/de_GWD.key \
+     --fullchain-file /var/www/ssl/de_GWD.cer \
+     --reloadcmd "systemctl force-reload nginx" --ecc; then
+  chmod 644 /var/www/ssl/*.key
+fi
 fi
 EOF
 chmod +x /opt/de_GWD/Qday
@@ -1502,7 +2005,7 @@ cat << EOF >>/tmp/now.cron
 EOF
 crontab /tmp/now.cron
 rm -rf /tmp/now.cron
-service cron restart
+systemctl enable --now cron >/dev/null 2>&1 || return 1
 
 echo -e "${WHITE}[ ${GREEN}✓ ${WHITE}]\c" && echo -e "\t${WHITE}Post Install${cRES}"
 
@@ -1549,10 +2052,11 @@ sleep 3
 }
 
 
+
+
+
 installkernel(){
-printf '\n'
-echo -e "${WHITE}[...]\c" && echo -e "\t${WHITE}Kernel installer${cRES}"
-bash <(wget -qO- https://raw.githubusercontent.com/stuinx/deGWD/$branch/resource/kernel/installkernel)
+bash <(wget --show-progress -cqO- https://raw.githubusercontent.com/stuinx/deGWD/$branch/resource/kernel/installkernel)
 }
 
 
@@ -1565,6 +2069,7 @@ changeDomain(){
 
 domain=$(echo $vpsdomainP | cut -d: -f1)
 topDomain=$(getTopDomain "$domain")
+[[ $topDomain != *.* ]] && topDomain=""
 port=$(echo $vpsdomainP | cut -d: -f2| grep '^[[:digit:]]*$')
 [[ -z $port ]] && port="443"
 
@@ -1596,6 +2101,356 @@ echo -e "${WHITE}[ ${GREEN}✓ ${WHITE}]\c" && echo -e "\t${WHITE}Domain and Cer
 
 
 
+vlessApplyRuntime(){
+local nginxTestOutput
+XrayInbound || return 1
+XrayOutboundDirect || return 1
+xrayValidateConfig || return 1
+nginxWebConf || return 1
+if ! nginxTestOutput=$(nginx -t 2>&1); then
+  printf '%s\n' "$nginxTestOutput"
+  return 1
+fi
+systemctl reload nginx >/dev/null 2>&1 || return 1
+systemctl restart vtrui >/dev/null 2>&1 || return 1
+systemctl is-active --quiet nginx || return 1
+systemctl is-active --quiet vtrui
+}
+
+vlessApplyCandidate(){
+local settings=$1 candidate=$2
+mv -f -- "$candidate" "$settings" || return 1
+vlessApplyRuntime
+}
+
+vlessRemoveSettings(){
+local settings=$1
+rm -f -- "$settings" || return 1
+vlessApplyRuntime
+}
+
+changeVLESS(){
+local settings="$DE_GWD_DATA_DIR/vless.json"
+[[ -x "$DE_GWD_XRAY_BIN" ]] || { echo -e "${RED}Install de_GWD first${cRES}"; return 1; }
+
+echo -e "${GREEN}================================================ ${cRES}"
+echo -e "${GREEN}[1]: Enable VLESS WebSocket TLS ${cRES}"
+echo -e "${GREEN}[2]: Disable VLESS WebSocket TLS ${cRES}"
+echo -e "${GREEN}================================================ ${cRES}"
+read -r -n 1 VLESSswitch
+echo -e "${WHITE}[...${WHITE}]\c" && echo -e "\t${WHITE}Switching VLESS WebSocket TLS${cRES}\r\c"
+syncMainNodeState
+
+if [[ $VLESSswitch = "2" ]]; then
+  if ! configTransaction "nginx vtrui" vlessRemoveSettings \
+      "$settings" \
+      "$DE_GWD_XRAY_DIR/config.json" \
+      "${DE_GWD_NGINX_CONF_DIR:-/etc/nginx/conf.d}/default.conf" \
+      "${DE_GWD_NGINX_CONF_DIR:-/etc/nginx/conf.d}/80.conf" \
+      "${DE_GWD_NGINX_CONF_DIR:-/etc/nginx/conf.d}/.HSTS" \
+      "${DE_GWD_NGINX_CONF_DIR:-/etc/nginx/conf.d}/.ssl_certs" \
+      -- "$settings"; then
+    echo -e "${RED}VLESS WebSocket TLS configuration failed${cRES}"
+    return 1
+  fi
+  echo -e "${WHITE}[ ${GREEN}✓ ${WHITE}]\c" && echo -e "\t${WHITE}VLESS WebSocket TLS ${RED}Disabled${cRES}"
+  return
+fi
+
+[[ $VLESSswitch = "1" ]] || return
+local oldDomain=$(jq -r '.domain // empty' "$settings" 2>/dev/null)
+local oldPort=$(jq -r '.port // empty' "$settings" 2>/dev/null)
+local oldUUID=$(jq -r '.uuid // empty' "$settings" 2>/dev/null)
+local oldPath=$(jq -r '.path // empty' "$settings" 2>/dev/null)
+local vlessDomain vlessPort vlessUUID vlessPath vlessInput parsedVless
+read -r -p "VLESS domain [$oldDomain${oldPort:+:$oldPort}]: " vlessInput
+vlessInput=${vlessInput:-$oldDomain}
+parsedVless=$(parseDomainPort "$vlessInput") || { echo -e "${RED}Invalid domain${cRES}"; return 1; }
+read -r vlessDomain vlessPort <<< "$parsedVless"
+
+if [[ -z $vlessPort ]]; then
+  read -r -p "VLESS port [$oldPort]: " vlessPort
+  vlessPort=${vlessPort:-$oldPort}
+fi
+vlessPort=${vlessPort:-8443}
+[[ $vlessPort =~ ^[1-9][0-9]{0,4}$ ]] && (( vlessPort <= 65535 )) || { echo -e "${RED}Invalid port${cRES}"; return 1; }
+[[ $vlessPort != "$port" && $vlessPort != "9890" && $vlessPort != "9891" ]] || { echo -e "${RED}VLESS port conflicts with an existing service${cRES}"; return 1; }
+xrayPortAvailable "$vlessPort" "$settings" || { echo -e "${RED}VLESS port conflicts with an existing service${cRES}"; return 1; }
+
+vlessUUID=${oldUUID:-$(cat /proc/sys/kernel/random/uuid)}
+vlessPath=${oldPath:-/$(cat /proc/sys/kernel/random/uuid | tr -d '-' | cut -c1-8)}
+[[ $vlessUUID =~ ^[0-9a-fA-F-]{36}$ && $vlessPath == /* ]] || { echo -e "${RED}Invalid VLESS credentials${cRES}"; return 1; }
+[[ -s /var/www/ssl/de_GWD.cer ]] && openssl x509 -in /var/www/ssl/de_GWD.cer -checkhost "$vlessDomain" -noout >/dev/null 2>&1 || {
+  echo -e "${RED}Certificate does not cover $vlessDomain${cRES}"
+  return 1
+}
+
+local temp
+temp=$(mktemp "${settings}.tmp.XXXXXX") || return 1
+jq -n --arg domain "$vlessDomain" --argjson port "$vlessPort" --arg uuid "$vlessUUID" --arg path "$vlessPath" \
+  '{enabled:true,domain:$domain,port:$port,uuid:$uuid,path:$path}' >"$temp" || { rm -f -- "$temp"; return 1; }
+if ! configTransaction "nginx vtrui" vlessApplyCandidate \
+    "$settings" \
+    "$DE_GWD_XRAY_DIR/config.json" \
+    "${DE_GWD_NGINX_CONF_DIR:-/etc/nginx/conf.d}/default.conf" \
+    "${DE_GWD_NGINX_CONF_DIR:-/etc/nginx/conf.d}/80.conf" \
+    "${DE_GWD_NGINX_CONF_DIR:-/etc/nginx/conf.d}/.HSTS" \
+    "${DE_GWD_NGINX_CONF_DIR:-/etc/nginx/conf.d}/.ssl_certs" \
+    -- "$settings" "$temp"; then
+  rm -f -- "$temp"
+  echo -e "${RED}VLESS WebSocket TLS configuration failed${cRES}"
+  return 1
+fi
+rm -f -- "$temp"
+echo -e "${WHITE}[ ${GREEN}✓ ${WHITE}]\c" && echo -e "\t${WHITE}VLESS WebSocket TLS ${GREEN}Enabled${cRES}"
+}
+
+
+changeVLESSReality(){
+local settings="$DE_GWD_DATA_DIR/reality.json"
+[[ -x "$DE_GWD_XRAY_BIN" ]] || { echo -e "${RED}Install de_GWD first${cRES}"; return 1; }
+
+echo -e "${GREEN}================================ ${cRES}"
+echo -e "${GREEN}[1]: Enable VLESS TCP/RAW REALITY ${cRES}"
+echo -e "${GREEN}[2]: Disable VLESS TCP/RAW REALITY ${cRES}"
+echo -e "${GREEN}================================ ${cRES}"
+read -r -n 1 realitySwitch
+echo
+syncMainNodeState
+
+if [[ $realitySwitch = "2" ]]; then
+  if ! xrayConfigTransaction xrayRemoveSettings "$settings"; then
+    echo -e "${RED}VLESS TCP/RAW REALITY configuration failed${cRES}"
+    return 1
+  fi
+  echo -e "${WHITE}[ ${GREEN}✓ ${WHITE}]\c" && echo -e "\t${WHITE}VLESS TCP/RAW REALITY ${RED}Disabled${cRES}"
+  return
+fi
+[[ $realitySwitch = "1" ]] || return
+
+local oldDomain=$(jq -r '.domain // empty' "$settings" 2>/dev/null)
+local oldPort=$(jq -r '.port // empty' "$settings" 2>/dev/null)
+local oldUUID=$(jq -r '.uuid // empty' "$settings" 2>/dev/null)
+local oldDest=$(jq -r '.dest // empty' "$settings" 2>/dev/null)
+local oldServerName=$(jq -r '.serverName // empty' "$settings" 2>/dev/null)
+local oldPrivateKey=$(jq -r '.privateKey // empty' "$settings" 2>/dev/null)
+local oldPublicKey=$(jq -r '.publicKey // empty' "$settings" 2>/dev/null)
+local oldShortId=$(jq -r '.shortId // empty' "$settings" 2>/dev/null)
+local nodeDomain=$oldDomain
+[[ -n $nodeDomain ]] || nodeDomain=$(getServerDomain 2>/dev/null || true)
+local realityAddressInput parsedRealityAddress realityDomain realityPort
+read -r -p "VLESS REALITY domain:port [$nodeDomain${oldPort:+:$oldPort}]: " realityAddressInput
+realityAddressInput=${realityAddressInput:-$nodeDomain}
+[[ -n $realityAddressInput ]] || { echo -e "${RED}Server domain is unavailable${cRES}"; return 1; }
+parsedRealityAddress=$(parseDomainPort "$realityAddressInput") || { echo -e "${RED}Invalid domain${cRES}"; return 1; }
+read -r realityDomain realityPort <<< "$parsedRealityAddress"
+if [[ -z $realityPort ]]; then
+  read -r -p "REALITY port [$oldPort]: " realityPort
+  realityPort=${realityPort:-$oldPort}
+fi
+realityPort=${realityPort:-8443}
+[[ $realityPort =~ ^[1-9][0-9]{0,4}$ ]] && (( realityPort <= 65535 )) || { echo -e "${RED}Invalid port${cRES}"; return 1; }
+xrayPortAvailable "$realityPort" "$settings" || { echo -e "${RED}REALITY port conflicts with an existing service${cRES}"; return 1; }
+
+local realityUUID=${oldUUID:-$(cat /proc/sys/kernel/random/uuid)}
+[[ $realityUUID =~ ^[0-9a-fA-F-]{36}$ ]] || { echo -e "${RED}Invalid UUID${cRES}"; return 1; }
+
+local realityDestInput=${oldDest:-v1-dy.ixigua.com:443}
+local parsedRealityDest realityDest realityDestPort
+read -r -p "REALITY dest [$realityDestInput]: " realityDestInput
+realityDestInput=${realityDestInput:-${oldDest:-v1-dy.ixigua.com:443}}
+parsedRealityDest=$(parseDomainPort "$realityDestInput") || { echo -e "${RED}Invalid REALITY dest${cRES}"; return 1; }
+read -r realityDest realityDestPort <<< "$parsedRealityDest"
+realityDestPort=${realityDestPort:-443}
+realityDest="$realityDest:$realityDestPort"
+
+local realityServerName=${oldServerName:-${realityDest%:*}}
+read -r -p "REALITY serverName [$realityServerName]: " realityServerName
+realityServerName=${realityServerName:-${realityDest%:*}}
+[[ $realityServerName =~ ^[A-Za-z0-9.-]+$ ]] || { echo -e "${RED}Invalid serverName${cRES}"; return 1; }
+
+local realityPrivateKey=$oldPrivateKey realityPublicKey=$oldPublicKey realityKeyPair realityShortId
+if [[ -z $realityPrivateKey || -z $realityPublicKey ]]; then
+  realityKeyPair=$("$DE_GWD_XRAY_BIN" x25519 2>/dev/null)
+  realityPrivateKey=$(printf '%s\n' "$realityKeyPair" | awk -F': ' '/^Private key:/ {print $2;exit}')
+  realityPublicKey=$(printf '%s\n' "$realityKeyPair" | awk -F': ' '/^(Public key|Password):/ {print $2;exit}')
+fi
+[[ -n $realityPrivateKey && -n $realityPublicKey ]] || { echo -e "${RED}REALITY key generation failed${cRES}"; return 1; }
+realityShortId=${oldShortId:-$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')}
+[[ $realityShortId =~ ^[0-9a-fA-F]{2,16}$ ]] || { echo -e "${RED}Invalid REALITY shortId${cRES}"; return 1; }
+
+local temp
+temp=$(mktemp "${settings}.tmp.XXXXXX") || return 1
+jq -n --arg domain "$realityDomain" --argjson port "$realityPort" --arg uuid "$realityUUID" --arg dest "$realityDest" --arg serverName "$realityServerName" --arg privateKey "$realityPrivateKey" --arg publicKey "$realityPublicKey" --arg shortId "$realityShortId" \
+  '{enabled:true,domain:$domain,port:$port,uuid:$uuid,flow:"xtls-rprx-vision",dest:$dest,serverName:$serverName,privateKey:$privateKey,publicKey:$publicKey,shortId:$shortId}' >"$temp" || { rm -f -- "$temp"; return 1; }
+if ! xrayConfigTransaction xrayApplyCandidate "$settings" "$temp"; then
+  rm -f -- "$temp"
+  echo -e "${RED}VLESS TCP/RAW REALITY configuration failed${cRES}"
+  return 1
+fi
+rm -f -- "$temp"
+echo -e "${BLUE}Address:    ${YELLOW}$realityDomain:$realityPort${cRES}"
+echo -e "${BLUE}UUID:       ${YELLOW}$realityUUID${cRES}"
+echo -e "${BLUE}Flow:       ${YELLOW}xtls-rprx-vision${cRES}"
+echo -e "${BLUE}Dest:       ${YELLOW}$realityDest${cRES}"
+echo -e "${BLUE}ServerName: ${YELLOW}$realityServerName${cRES}"
+echo -e "${BLUE}PublicKey:  ${YELLOW}$realityPublicKey${cRES}"
+echo -e "${BLUE}ShortId:    ${YELLOW}$realityShortId${cRES}"
+echo -e "${WHITE}[ ${GREEN}✓ ${WHITE}]\c" && echo -e "\t${WHITE}VLESS TCP/RAW REALITY ${GREEN}Enabled${cRES}"
+}
+
+
+changeSocks5(){
+local settings="$DE_GWD_DATA_DIR/socks5.json"
+[[ -x "$DE_GWD_XRAY_BIN" ]] || { echo -e "${RED}Install de_GWD first${cRES}"; return 1; }
+
+echo -e "${GREEN}============================ ${cRES}"
+echo -e "${GREEN}[1]: Enable SOCKS5${cRES}"
+echo -e "${GREEN}[2]: Disable SOCKS5${cRES}"
+echo -e "${GREEN}============================ ${cRES}"
+read -r -n 1 socksSwitch
+echo
+syncMainNodeState
+
+if [[ $socksSwitch = "2" ]]; then
+  if ! xrayConfigTransaction xrayRemoveSettings "$settings"; then
+    echo -e "${RED}SOCKS5 configuration failed${cRES}"
+    return 1
+  fi
+  echo -e "${WHITE}[ ${GREEN}✓ ${WHITE}]\c" && echo -e "\t${WHITE}SOCKS5 ${RED}Disabled${cRES}"
+  return
+fi
+[[ $socksSwitch = "1" ]] || return
+
+local oldPort=$(jq -r '.port // empty' "$settings" 2>/dev/null)
+local nodeDomain=$(jq -r '.domain // empty' "$settings" 2>/dev/null)
+[[ -n $nodeDomain ]] || nodeDomain=$(getServerDomain 2>/dev/null || true)
+[[ $nodeDomain =~ ^[A-Za-z0-9.-]+$ ]] || { echo -e "${RED}Server domain is unavailable${cRES}"; return 1; }
+local socksPort
+read -r -p "SOCKS5 port [$oldPort]: " socksPort
+socksPort=${socksPort:-$oldPort}
+socksPort=${socksPort:-1080}
+[[ $socksPort =~ ^[1-9][0-9]{0,4}$ ]] && (( socksPort <= 65535 )) || { echo -e "${RED}Invalid port${cRES}"; return 1; }
+xrayPortAvailable "$socksPort" "$settings" || { echo -e "${RED}SOCKS5 port conflicts with an existing service${cRES}"; return 1; }
+
+local socksUser
+read -r -p "SOCKS5 user (empty to generate): " socksUser
+socksUser=${socksUser:-xray$(cat /proc/sys/kernel/random/uuid | tr -d '-' | cut -c1-8)}
+[[ $socksUser =~ ^[A-Za-z0-9._-]+$ ]] || { echo -e "${RED}Invalid SOCKS5 user${cRES}"; return 1; }
+local socksPassword
+read -r -s -p "SOCKS5 password (empty to generate): " socksPassword
+echo
+socksPassword=${socksPassword:-$(cat /proc/sys/kernel/random/uuid | tr -d '-' | cut -c1-20)}
+[[ -n $socksPassword ]] || { echo -e "${RED}Invalid SOCKS5 password${cRES}"; return 1; }
+
+local temp
+temp=$(mktemp "${settings}.tmp.XXXXXX") || return 1
+jq -n --arg domain "$nodeDomain" --argjson port "$socksPort" --arg user "$socksUser" --arg password "$socksPassword" \
+  '{enabled:true,domain:$domain,port:$port,user:$user,password:$password}' >"$temp" || { rm -f -- "$temp"; return 1; }
+if ! xrayConfigTransaction xrayApplyCandidate "$settings" "$temp"; then
+  rm -f -- "$temp"
+  echo -e "${RED}SOCKS5 configuration failed${cRES}"
+  return 1
+fi
+rm -f -- "$temp"
+echo -e "${BLUE}Address:  ${YELLOW}$nodeDomain:$socksPort${cRES}"
+echo -e "${BLUE}User:     ${YELLOW}$socksUser${cRES}"
+echo -e "${BLUE}Password: ${YELLOW}$socksPassword${cRES}"
+echo -e "${WHITE}[ ${GREEN}✓ ${WHITE}]\c" && echo -e "\t${WHITE}SOCKS5 ${GREEN}Enabled${cRES}"
+}
+
+
+changeDokodemo(){
+local settings="$DE_GWD_DATA_DIR/dokodemo.json"
+[[ -x "$DE_GWD_XRAY_BIN" ]] || { echo -e "${RED}Install de_GWD first${cRES}"; return 1; }
+
+echo -e "${GREEN}================================ ${cRES}"
+echo -e "${GREEN}[1]: Enable dokodemo-door${cRES}"
+echo -e "${GREEN}[2]: Disable dokodemo-door${cRES}"
+echo -e "${GREEN}================================ ${cRES}"
+read -r -n 1 dokodemoSwitch
+echo
+syncMainNodeState
+
+if [[ $dokodemoSwitch = "2" ]]; then
+  if ! xrayConfigTransaction xrayRemoveSettings "$settings"; then
+    echo -e "${RED}dokodemo-door configuration failed${cRES}"
+    return 1
+  fi
+  echo -e "${WHITE}[ ${GREEN}✓ ${WHITE}]\c" && echo -e "\t${WHITE}dokodemo-door ${RED}Disabled${cRES}"
+  return
+fi
+[[ $dokodemoSwitch = "1" ]] || return
+
+local oldPort=$(jq -r '.port // empty' "$settings" 2>/dev/null)
+local oldTarget=$(jq -r '.target // empty' "$settings" 2>/dev/null)
+local oldTargetPort=$(jq -r '.targetPort // empty' "$settings" 2>/dev/null)
+local oldNetwork=$(jq -r '.network // empty' "$settings" 2>/dev/null)
+local nodeDomain=$(getServerDomain 2>/dev/null || true)
+[[ $nodeDomain =~ ^[A-Za-z0-9.-]+$ ]] || { echo -e "${RED}Server domain is unavailable${cRES}"; return 1; }
+local dokodemoPort
+read -r -p "dokodemo-door listen port [$oldPort]: " dokodemoPort
+dokodemoPort=${dokodemoPort:-$oldPort}
+dokodemoPort=${dokodemoPort:-10086}
+[[ $dokodemoPort =~ ^[1-9][0-9]{0,4}$ ]] && (( dokodemoPort <= 65535 )) || { echo -e "${RED}Invalid port${cRES}"; return 1; }
+xrayPortAvailable "$dokodemoPort" "$settings" || { echo -e "${RED}dokodemo-door port conflicts with an existing service${cRES}"; return 1; }
+
+local oldTargetAddress=""
+[[ -n $oldTarget && -n $oldTargetPort ]] && oldTargetAddress=$(formatDomainPort "$oldTarget" "$oldTargetPort")
+local targetInput parsedTarget target targetPort
+read -r -p "Target domain:port [$oldTargetAddress]: " targetInput
+targetInput=${targetInput:-$oldTargetAddress}
+parsedTarget=$(parseDomainPort "$targetInput") || { echo -e "${RED}Invalid target${cRES}"; return 1; }
+read -r target targetPort <<< "$parsedTarget"
+if [[ -z $targetPort ]]; then
+  read -r -p "Target port [$oldTargetPort]: " targetPort
+  targetPort=${targetPort:-$oldTargetPort}
+fi
+[[ $targetPort =~ ^[1-9][0-9]{0,4}$ ]] && (( targetPort <= 65535 )) || { echo -e "${RED}Invalid target port${cRES}"; return 1; }
+
+local network
+read -r -p "Network (tcp/udp/tcp,udp) [$oldNetwork]: " network
+network=${network:-$oldNetwork}
+network=${network:-tcp}
+[[ $network = "tcp" || $network = "udp" || $network = "tcp,udp" ]] || { echo -e "${RED}Invalid network${cRES}"; return 1; }
+
+local temp
+temp=$(mktemp "${settings}.tmp.XXXXXX") || return 1
+jq -n --arg domain "$nodeDomain" --argjson port "$dokodemoPort" --arg target "$target" --argjson targetPort "$targetPort" --arg network "$network" \
+  '{enabled:true,domain:$domain,port:$port,target:$target,targetPort:$targetPort,network:$network}' >"$temp" || { rm -f -- "$temp"; return 1; }
+if ! xrayConfigTransaction xrayApplyCandidate "$settings" "$temp"; then
+  rm -f -- "$temp"
+  echo -e "${RED}dokodemo-door configuration failed${cRES}"
+  return 1
+fi
+rm -f -- "$temp"
+local targetAddress=$(formatDomainPort "$target" "$targetPort")
+echo -e "${BLUE}Address: ${YELLOW}$nodeDomain:$dokodemoPort${cRES}"
+echo -e "${BLUE}Target:  ${YELLOW}$targetAddress${cRES}"
+echo -e "${BLUE}Network: ${YELLOW}$network${cRES}"
+echo -e "${WHITE}[ ${GREEN}✓ ${WHITE}]\c" && echo -e "\t${WHITE}dokodemo-door ${GREEN}Enabled${cRES}"
+}
+
+
+changeXrayNode(){
+echo -e "${GREEN}================================ ${cRES}"
+echo -e "${GREEN}[1]: VLESS WebSocket TLS${cRES}"
+echo -e "${GREEN}[2]: VLESS TCP/RAW REALITY${cRES}"
+echo -e "${GREEN}[3]: SOCKS5${cRES}"
+echo -e "${GREEN}[4]: dokodemo-door${cRES}"
+echo -e "${GREEN}[11]: Print Xray node information${cRES}"
+echo -e "${GREEN}================================ ${cRES}"
+read -r xrayNodeChoice
+case $xrayNodeChoice in
+  1) changeVLESS ;;
+  2) changeVLESSReality ;;
+  3) changeSocks5 ;;
+  4) changeDokodemo ;;
+  11) printNode ;;
+esac
+}
+
+
 changeXrayVerify(){
     echo -e "${GREEN}========== ${cRES}"
     echo -e "${GREEN} New UUID${cRES}"
@@ -1609,6 +2464,7 @@ changeXrayVerify(){
 
 domain=$(awk '/server_name/ {print$2;exit}' /etc/nginx/conf.d/default.conf | sed 's/.$//')
 topDomain=$(getTopDomain "$domain")
+[[ $topDomain != *.* ]] && topDomain=""
 port=$(awk '/ssl .* reuseport/ {print$2}' /etc/nginx/conf.d/default.conf | grep '^[[:digit:]]*$')
 
 path=$npath
@@ -1629,170 +2485,951 @@ echo -e "${WHITE}[ ${GREEN}✓ ${WHITE}]\c" && echo -e "\t${WHITE}Xray UUID & Pa
 
 
 
-changeWGCF(){
-    echo -e "${GREEN}================================================ ${cRES}"
-    echo -e "${GREEN}[1]: Enable Cloudflare wireguard upstream (WARP) ${cRES}"
-    echo -e "${GREEN}[2]: Delete Cloudflare wireguard upstream (WARP) ${cRES}"
-    echo -e "${GREEN}================================================ ${cRES}"
-    read -s -n 1 WGCFswitch
-    echo -e "${WHITE}[...${WHITE}]\c" && echo -e "\t${WHITE}Switching Cloudflare wireguard upstream (WARP)${cRES}\r\c"
+warp_valid_mode(){
+  [[ $1 == "ipv4" || $1 == "dual" ]]
+}
 
-if [[ $WGCFswitch = "1" ]]; then
-uname -r 2>&1 | grep -o '[0-9.]*' | head -n 1 >/tmp/kernelVer
-echo "5.6" >>/tmp/kernelVer
+warp_render_scripts(){
+  local mode=${1:-ipv4}
+  mkdir -p -- "$(dirname -- "$DE_GWD_WARP_POSTUP")" "$(dirname -- "$DE_GWD_WARP_POSTDOWN")" || return 1
 
-ethernetnum=$(find /sys/class/net ! -type d | xargs --max-args=1 realpath | grep 'device' | xargs -n 1 | grep -v 'virtual' | grep -v 'ifb' | awk -F'/' '{print$NF}' | head -n1)
+  cat << 'EOF_POSTUP' > "$DE_GWD_WARP_POSTUP"
+#!/bin/bash
+localAddrIPv4=$(ip -4 a 2>/dev/null | grep inet | grep -v '127.0.0.1' | awk '{print $2}' | cut -d'/' -f1 | head -n 1)
+localAddrIPv6=$(ip -6 a 2>/dev/null | grep inet6 | grep -v '::1' | grep -v '^fe80' | awk '{print $2}' | cut -d'/' -f1 | head -n 1)
+sshPort=$(ss -tlpn 2>/dev/null | grep -E 'sshd|ssh' | awk '{print $4}' | awk -F':' '{print $NF}' | head -n 1)
+[[ -z $sshPort ]] && sshPort=$(grep -E '^Port ' /etc/ssh/sshd_config 2>/dev/null | awk '{print $2}' | head -n 1)
+sshPort=${sshPort:-22}
 
-if [[ $(cat /tmp/kernelVer |sort -rV | head -n 1) = "5.6" ]]; then
-echo -e "${WHITE}[ ${YELLOW}! ${WHITE}]\c" && echo -e "\t${YELLOW}Update kernel first! ${cRES}"
-else
-localAddrIPv4=$(ip -4 a | grep inet | grep -v '127.0.0.1' | awk '{print $2}' | cut -d'/' -f1 | head -n 1)
-if [[ -n $localAddrIPv4 ]]; then
-unset aptPKG
-[[ -z $(dpkg -l | awk '{print$2}' | grep '^wireguard-tools$') ]] && aptPKG+=(wireguard-tools)
-[[ -n $aptPKG ]] && apt update && apt install $(echo ${aptPKG[@]})
+[[ -n $localAddrIPv4 ]] && ip rule add from "$localAddrIPv4" lookup main priority 51810 2>/dev/null || true
+[[ -n $localAddrIPv6 ]] && ip -6 rule add from "$localAddrIPv6" lookup main priority 51810 2>/dev/null || true
 
-ghREPO="ViRb3/wgcf"
-ghPackage="linux_$architecture"
-curl -fsSL https://api.github.com/repos/${ghREPO}/releases/latest | grep -E 'browser_download_url' | grep $ghPackage | cut -d '"' -f 4 | wget --show-progress -qi - -O /tmp/wgcf
-[[ $(du -sk /tmp/wgcf 2>/dev/null | awk '{print$1}') -gt 8000 ]] && mv /tmp/wgcf /usr/local/bin/wgcf && chmod +x /usr/local/bin/wgcf
-
-if [[ -x "/usr/local/bin/wgcf" ]]; then
-echo | wgcf register
-wgcf generate
-
-PrivateKey=$(cat wgcf-profile.conf | awk '/PrivateKey/{print$3}')
-PublicKey=$(cat wgcf-profile.conf | awk '/PublicKey/{print$3}')
-
-cat << EOF >/etc/wireguard/wgcf.conf
-[Interface]
-PrivateKey = $PrivateKey
-Address = 172.16.0.2/24
-PostUp = ip rule add from $localAddrIPv4 lookup main; ip rule add ipproto udp dport 53 lookup main;
-PostDown = ip rule del from $localAddrIPv4 lookup main; ip rule del ipproto udp dport 53 lookup main;
-DNS = 172.16.0.2
-MTU = 1420
-[Peer]
-PublicKey = $PublicKey
-EndPoint = engage.cloudflareclient.com:2408
-AllowedIPs = 0.0.0.0/0
-AllowedIPs = ::/0
-PersistentKeepalive = 15
-EOF
-
-rm -rf wgcf-account.toml >/dev/null 2>&1
-rm -rf wgcf-profile.conf >/dev/null 2>&1
+if [[ -n $sshPort ]]; then
+  ip rule add sport "$sshPort" lookup main priority 51811 2>/dev/null || true
+  ip rule add dport "$sshPort" lookup main priority 51811 2>/dev/null || true
+  ip -6 rule add sport "$sshPort" lookup main priority 51811 2>/dev/null || true
+  ip -6 rule add dport "$sshPort" lookup main priority 51811 2>/dev/null || true
 fi
 
-rm -rf /lib/systemd/system/wg-quick@.service
-cat << EOF >/etc/systemd/system/wg-quick@.service
+ip rule add to 127.0.0.0/8 lookup main priority 51812 2>/dev/null || true
+ip rule add to 10.0.0.0/8 lookup main priority 51812 2>/dev/null || true
+ip rule add to 172.16.0.0/12 lookup main priority 51812 2>/dev/null || true
+ip rule add to 192.168.0.0/16 lookup main priority 51812 2>/dev/null || true
+ip rule add to 169.254.0.0/16 lookup main priority 51812 2>/dev/null || true
+ip -6 rule add to ::1/128 lookup main priority 51812 2>/dev/null || true
+ip -6 rule add to fe80::/10 lookup main priority 51812 2>/dev/null || true
+
+endpointHost=$(awk -F'[: ]+' '/EndPoint|Endpoint/{print $2}' "${DE_GWD_WGCF_CONF:-/etc/wireguard/wgcf.conf}" 2>/dev/null | head -n 1)
+if [[ -n $endpointHost ]]; then
+  for ep in $(getent ahosts "$endpointHost" 2>/dev/null | awk '{print $1}' | sort -u); do
+    if [[ $ep =~ : ]]; then
+      ip -6 rule add to "$ep" lookup main priority 51813 2>/dev/null || true
+    else
+      ip rule add to "$ep" lookup main priority 51813 2>/dev/null || true
+    fi
+  done
+fi
+
+ip rule add lookup 51820 priority 51820 2>/dev/null || true
+EOF_POSTUP
+
+  if [[ $mode == "dual" ]]; then
+    cat << 'EOF_DUAL' >> "$DE_GWD_WARP_POSTUP"
+ip -6 rule add lookup 51820 priority 51820 2>/dev/null || true
+EOF_DUAL
+  fi
+
+  chmod +x "$DE_GWD_WARP_POSTUP" || return 1
+
+  cat << 'EOF_POSTDOWN' > "$DE_GWD_WARP_POSTDOWN"
+#!/bin/bash
+ip rule del priority 51810 2>/dev/null || true
+ip rule del priority 51811 2>/dev/null || true
+ip rule del priority 51811 2>/dev/null || true
+ip rule del priority 51812 2>/dev/null || true
+ip rule del priority 51812 2>/dev/null || true
+ip rule del priority 51812 2>/dev/null || true
+ip rule del priority 51812 2>/dev/null || true
+ip rule del priority 51812 2>/dev/null || true
+ip rule del priority 51813 2>/dev/null || true
+ip rule del priority 51820 2>/dev/null || true
+
+ip -6 rule del priority 51810 2>/dev/null || true
+ip -6 rule del priority 51811 2>/dev/null || true
+ip -6 rule del priority 51811 2>/dev/null || true
+ip -6 rule del priority 51812 2>/dev/null || true
+ip -6 rule del priority 51812 2>/dev/null || true
+ip -6 rule del priority 51813 2>/dev/null || true
+ip -6 rule del priority 51820 2>/dev/null || true
+
+ip route flush table 51820 2>/dev/null || true
+ip -6 route flush table 51820 2>/dev/null || true
+EOF_POSTDOWN
+
+  chmod +x "$DE_GWD_WARP_POSTDOWN" || return 1
+}
+
+warp_render_config(){
+  local mode=${1:-ipv4}
+  local profileSource=${2:-wgcf-profile.conf}
+  local privateKey publicKey endpoint addresses reserved
+
+  if [[ -f $profileSource ]]; then
+    privateKey=$(sed -n 's/^[[:space:]]*PrivateKey[[:space:]]*=[[:space:]]*//p' "$profileSource" | tr -d '\r\n' | head -n 1)
+    publicKey=$(sed -n 's/^[[:space:]]*PublicKey[[:space:]]*=[[:space:]]*//p' "$profileSource" | tr -d '\r\n' | head -n 1)
+    endpoint=$(sed -n -E 's/^[[:space:]]*[eE]nd[pP]oint[[:space:]]*=[[:space:]]*//p' "$profileSource" | tr -d '\r\n' | head -n 1)
+    addresses=$(grep -E '^[[:space:]]*Address[[:space:]]*=' "$profileSource")
+    reserved=$(grep -E '^[[:space:]]*(Reserved|reserved)[[:space:]]*=' "$profileSource" | head -n 1)
+  fi
+
+  [[ -z $privateKey ]] && privateKey="PLACEHOLDER_PRIVATE_KEY="
+  [[ -z $publicKey ]] && publicKey="bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo="
+  [[ -z $endpoint ]] && endpoint="engage.cloudflareclient.com:2408"
+  if [[ -z $addresses ]]; then
+    addresses="Address = 172.16.0.2/32"
+    [[ $mode == "dual" ]] && addresses+=$'\n'"Address = 2606:4700:110:8a49:60ae:213b:a6f5:a7ff/128"
+  fi
+
+  mkdir -p -- "$(dirname -- "$DE_GWD_WGCF_CONF")" || return 1
+  local tmpCfg
+  tmpCfg=$(mktemp "${DE_GWD_WGCF_CONF}.tmp.XXXXXX") || return 1
+
+  cat << EOF_WGCF > "$tmpCfg"
+[Interface]
+PrivateKey = $privateKey
+$addresses
+DNS = 1.1.1.1, 8.8.8.8, 2606:4700:4700::1111
+MTU = 1280
+Table = 51820
+PostUp = $DE_GWD_WARP_POSTUP
+PostDown = $DE_GWD_WARP_POSTDOWN
+
+[Peer]
+PublicKey = $publicKey
+Endpoint = $endpoint
+AllowedIPs = 0.0.0.0/0
+$([[ $mode == "dual" ]] && echo "AllowedIPs = ::/0")
+$([[ -n $reserved ]] && echo "$reserved")
+PersistentKeepalive = 15
+EOF_WGCF
+
+  chmod 0600 "$tmpCfg" || { rm -f -- "$tmpCfg"; return 1; }
+  mv -f -- "$tmpCfg" "$DE_GWD_WGCF_CONF" || return 1
+}
+
+warp_test_connectivity(){
+  if [[ ${DE_GWD_TEST_MODE:-0} == 1 ]]; then
+    return "${FAKE_WARP_FAIL:-0}"
+  fi
+  curl -4 -sSL --connect-timeout 4 --max-time 6 https://cloudflare.com/cdn-cgi/trace >/dev/null 2>&1 \
+    || curl -4 -sSL --connect-timeout 4 --max-time 6 whatismyip.akamai.com >/dev/null 2>&1
+}
+
+warp_stop(){
+  systemctl stop wg-quick@wgcf >/dev/null 2>&1 || true
+  systemctl disable wg-quick@wgcf >/dev/null 2>&1 || true
+  if [[ -x $DE_GWD_WARP_POSTDOWN ]]; then
+    "$DE_GWD_WARP_POSTDOWN" >/dev/null 2>&1 || true
+  fi
+  mkdir -p -- "$(dirname -- "$DE_GWD_WARP_SETTINGS")" 2>/dev/null || true
+  printf '{"enabled":false,"mode":"none"}\n' > "$DE_GWD_WARP_SETTINGS" 2>/dev/null || true
+}
+
+warp_start(){
+  local mode=${1:-ipv4}
+  warp_render_scripts "$mode" || return 1
+  warp_render_config "$mode" "${2:-wgcf-profile.conf}" || return 1
+
+  if [[ ${DE_GWD_TEST_MODE:-0} != 1 ]]; then
+    sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1 || true
+    sysctl -w net.ipv6.conf.all.forwarding=1 >/dev/null 2>&1 || true
+  fi
+
+  systemctl daemon-reload >/dev/null 2>&1 || true
+  systemctl enable wg-quick@wgcf >/dev/null 2>&1 || true
+  if ! systemctl restart wg-quick@wgcf >/dev/null 2>&1; then
+    warp_stop
+    return 1
+  fi
+
+  if ! warp_test_connectivity; then
+    echo -e "${RED}WARP connectivity test failed! Automatically rolling back...${cRES}"
+    warp_stop
+    return 1
+  fi
+
+  mkdir -p -- "$(dirname -- "$DE_GWD_WARP_SETTINGS")" 2>/dev/null || true
+  printf '{"enabled":true,"mode":"%s"}\n' "$mode" > "$DE_GWD_WARP_SETTINGS" 2>/dev/null || true
+  return 0
+}
+
+changeWGCF(){
+    echo -e "${GREEN}==================================================== ${cRES}"
+    echo -e "${GREEN}[1]: Enable Cloudflare wireguard upstream (WARP IPv4) ${cRES}"
+    echo -e "${GREEN}[2]: Enable Cloudflare wireguard upstream (WARP Dual-Stack) ${cRES}"
+    echo -e "${GREEN}[3]: Delete / Disable Cloudflare wireguard upstream (WARP) ${cRES}"
+    echo -e "${GREEN}[4]: Check Cloudflare wireguard (WARP) Status ${cRES}"
+    echo -e "${GREEN}==================================================== ${cRES}"
+    read -r -p "Select [1-4]: " WGCFswitch
+    echo -e "${WHITE}[...${WHITE}]\c" && echo -e "\t${WHITE}Switching Cloudflare wireguard upstream (WARP)${cRES}\r\c"
+
+    if [[ $WGCFswitch == "1" || $WGCFswitch == "2" ]]; then
+      local mode="ipv4"
+      [[ $WGCFswitch == "2" ]] && mode="dual"
+
+      if [[ ${DE_GWD_TEST_MODE:-0} != 1 ]]; then
+        unset aptPKG
+        [[ -z $(dpkg -l 2>/dev/null | awk '{print $2}' | grep '^wireguard-tools$') ]] && aptPKG+=(wireguard-tools)
+        [[ -n ${aptPKG:-} ]] && apt update && apt install -y "${aptPKG[@]}"
+
+        if [[ ! -x $DE_GWD_WGCF_BIN ]]; then
+          ghREPO="ViRb3/wgcf"
+          ghPackage="linux_$architecture"
+          curl -fsSL https://api.github.com/repos/${ghREPO}/releases/latest | grep -E 'browser_download_url' | grep "$ghPackage" | cut -d '"' -f 4 | wget --show-progress -qi - -O /tmp/wgcf
+          [[ $(du -sk /tmp/wgcf 2>/dev/null | awk '{print $1}') -gt 4000 ]] && mv -f /tmp/wgcf "$DE_GWD_WGCF_BIN" && chmod +x "$DE_GWD_WGCF_BIN"
+        fi
+
+        if [[ -x $DE_GWD_WGCF_BIN && ! -f wgcf-profile.conf && ! -f /opt/de_GWD/wgcf-profile.conf ]]; then
+          echo | "$DE_GWD_WGCF_BIN" register >/dev/null 2>&1 || true
+          "$DE_GWD_WGCF_BIN" generate >/dev/null 2>&1 || true
+          [[ -f wgcf-profile.conf ]] && cp -f wgcf-profile.conf /opt/de_GWD/wgcf-profile.conf
+        fi
+      fi
+
+      local profilePath="wgcf-profile.conf"
+      [[ ! -f $profilePath && -f /opt/de_GWD/wgcf-profile.conf ]] && profilePath="/opt/de_GWD/wgcf-profile.conf"
+
+      if warp_start "$mode" "$profilePath"; then
+        echo -e "${WHITE}[ ${GREEN}✓ ${WHITE}]\c" && echo -e "\t${WHITE}Cloudflare wireguard upstream (WARP Table 51820) ${GREEN}Enabled ($mode)${cRES}"
+      else
+        echo -e "${WHITE}[ ${RED}✕ ${WHITE}]\c" && echo -e "\t${WHITE}Cloudflare wireguard upstream (WARP) ${RED}Failed & Rolled Back${cRES}"
+      fi
+    elif [[ $WGCFswitch == "3" ]]; then
+      warp_stop
+      echo -e "${WHITE}[ ${RED}✕ ${WHITE}]\c" && echo -e "\t${WHITE}Cloudflare wireguard upstream (WARP) ${RED}Disabled${cRES}"
+    elif [[ $WGCFswitch == "4" ]]; then
+      if [[ $(jq -r '.enabled // false' "$DE_GWD_WARP_SETTINGS" 2>/dev/null) = "true" ]] || systemctl is-active --quiet wg-quick@wgcf 2>/dev/null; then
+        echo -e "${GREEN}WARP is active.${cRES}"
+        local curIPv4 curIPv6
+        curIPv4=$(curl -4sSL --connect-timeout 3 ifconfig.me 2>/dev/null || true)
+        curIPv6=$(curl -6sSL --connect-timeout 3 ifconfig.me 2>/dev/null || true)
+        [[ -n $curIPv4 ]] && echo -e "Outbound IPv4: ${YELLOW}$curIPv4${cRES}"
+        [[ -n $curIPv6 ]] && echo -e "Outbound IPv6: ${YELLOW}$curIPv6${cRES}"
+      else
+        echo -e "${YELLOW}WARP is not active.${cRES}"
+      fi
+    fi
+}
+
+socks5_egress_valid_server(){
+  [[ $1 =~ ^[A-Za-z0-9.-]+$ || $1 =~ ^[0-9a-fA-F:]+$ ]]
+}
+
+socks5_egress_valid_port(){
+  [[ $1 =~ ^[1-9][0-9]{0,4}$ ]] && (( $1 <= 65535 ))
+}
+
+socks5_egress_render_scripts(){
+  local server=$1
+  local port=$2
+  mkdir -p -- "$(dirname -- "$DE_GWD_SOCKS5_POSTUP")" "$(dirname -- "$DE_GWD_SOCKS5_POSTDOWN")" || return 1
+
+  cat << 'EOF_POSTUP' > "$DE_GWD_SOCKS5_POSTUP"
+#!/bin/bash
+localAddrIPv4=$(ip -4 a 2>/dev/null | grep inet | grep -v '127.0.0.1' | awk '{print $2}' | cut -d'/' -f1 | head -n 1)
+sshPort=$(ss -tlpn 2>/dev/null | grep -E 'sshd|ssh' | awk '{print $4}' | awk -F':' '{print $NF}' | head -n 1)
+[[ -z $sshPort ]] && sshPort=$(grep -E '^Port ' /etc/ssh/sshd_config 2>/dev/null | awk '{print $2}' | head -n 1)
+sshPort=${sshPort:-22}
+
+ip link set dev tun-socks up 2>/dev/null || true
+ip route add default dev tun-socks table 51830 2>/dev/null || true
+
+[[ -n $localAddrIPv4 ]] && ip rule add from "$localAddrIPv4" lookup main priority 51831 2>/dev/null || true
+
+if [[ -n $sshPort ]]; then
+  ip rule add sport "$sshPort" lookup main priority 51832 2>/dev/null || true
+  ip rule add dport "$sshPort" lookup main priority 51832 2>/dev/null || true
+fi
+
+ip rule add to 127.0.0.0/8 lookup main priority 51833 2>/dev/null || true
+ip rule add to 10.0.0.0/8 lookup main priority 51833 2>/dev/null || true
+ip rule add to 172.16.0.0/12 lookup main priority 51833 2>/dev/null || true
+ip rule add to 192.168.0.0/16 lookup main priority 51833 2>/dev/null || true
+
+ip rule add ipproto udp dport 53 lookup main priority 51834 2>/dev/null || true
+ip rule add ipproto tcp dport 53 lookup main priority 51834 2>/dev/null || true
+ip rule add ipproto tcp dport 853 lookup main priority 51834 2>/dev/null || true
+EOF_POSTUP
+
+  if [[ -n $server ]]; then
+    cat << EOF_SRV >> "$DE_GWD_SOCKS5_POSTUP"
+for srv_ip in \$(getent ahosts "$server" 2>/dev/null | awk '{print \$1}' | sort -u); do
+  [[ \$srv_ip =~ ^[0-9.]+\$ ]] && ip rule add to "\$srv_ip" lookup main priority 51835 2>/dev/null || true
+done
+EOF_SRV
+  fi
+
+  cat << 'EOF_POSTUP_TAIL' >> "$DE_GWD_SOCKS5_POSTUP"
+ip rule add ipproto tcp lookup 51830 priority 51839 2>/dev/null || true
+EOF_POSTUP_TAIL
+
+  chmod +x "$DE_GWD_SOCKS5_POSTUP" || return 1
+
+  cat << 'EOF_POSTDOWN' > "$DE_GWD_SOCKS5_POSTDOWN"
+#!/bin/bash
+ip rule del priority 51831 2>/dev/null || true
+ip rule del priority 51832 2>/dev/null || true
+ip rule del priority 51832 2>/dev/null || true
+ip rule del priority 51833 2>/dev/null || true
+ip rule del priority 51833 2>/dev/null || true
+ip rule del priority 51833 2>/dev/null || true
+ip rule del priority 51833 2>/dev/null || true
+ip rule del priority 51834 2>/dev/null || true
+ip rule del priority 51834 2>/dev/null || true
+ip rule del priority 51834 2>/dev/null || true
+ip rule del priority 51835 2>/dev/null || true
+ip rule del priority 51839 2>/dev/null || true
+
+ip route flush table 51830 2>/dev/null || true
+EOF_POSTDOWN
+
+  chmod +x "$DE_GWD_SOCKS5_POSTDOWN" || return 1
+}
+
+socks5_egress_render_service(){
+  local server=$1
+  local port=$2
+  local user=$3
+  local pass=$4
+  local proxyUrl
+  if [[ -n $user ]]; then
+    proxyUrl="socks5://$user:$pass@$server:$port"
+  else
+    proxyUrl="socks5://$server:$port"
+  fi
+
+  mkdir -p -- "$(dirname -- "$DE_GWD_SOCKS5_EGRESS_SERVICE")" || return 1
+  cat << EOF_SERVICE > "$DE_GWD_SOCKS5_EGRESS_SERVICE"
 [Unit]
-Description=WireGuard via wg-quick(8) for %I
-After=network-online.target nss-lookup.target
-Wants=network-online.target nss-lookup.target
-PartOf=wg-quick.target
+Description=de_GWD System SOCKS5 Upstream Egress
+After=network.target network-online.target
+Wants=network-online.target
 
 [Service]
-User=root
-Type=oneshot
-ExecStart=/usr/bin/wg-quick up %i
-ExecStartPost=/etc/rc_online.local
-ExecStop=/usr/bin/wg-quick down %i
-ExecStopPost=/etc/rc_online.local
-ExecReload=/bin/bash -c 'exec /usr/bin/wg syncconf %i <(exec /usr/bin/wg-quick strip %i)'
-Environment=WG_ENDPOINT_RESOLUTION_RETRIES=infinity
-RemainAfterExit=yes
+Type=simple
+ExecStartPre=-/sbin/ip link del dev tun-socks
+ExecStart=$DE_GWD_TUN2SOCKS_BIN -device tun-socks -proxy $proxyUrl
+ExecStartPost=$DE_GWD_SOCKS5_POSTUP
+ExecStopPost=$DE_GWD_SOCKS5_POSTDOWN
+Restart=on-failure
+RestartSec=5
 
 [Install]
 WantedBy=multi-user.target
-EOF
-systemctl daemon-reload >/dev/null
+EOF_SERVICE
+}
 
-cat << "EOF" >/tmp/WGCFstart
-#!/bin/bash
-systemctl enable wg-quick@wgcf
-systemctl restart wg-quick@wgcf
+socks5_egress_test_connectivity(){
+  local server=$1
+  local port=$2
+  local user=${3:-}
+  local pass=${4:-}
+  if [[ ${DE_GWD_TEST_MODE:-0} == 1 ]]; then
+    return "${FAKE_SOCKS5_EGRESS_FAIL:-0}"
+  fi
+  local authArg=""
+  [[ -n $user ]] && authArg="$user:$pass@"
+  curl -4 -sSL --connect-timeout 4 --max-time 6 --socks5 "${authArg}${server}:${port}" https://cloudflare.com/cdn-cgi/trace >/dev/null 2>&1
+}
 
-sed -i '/net.ipv4.ip_forward =/c\net.ipv4.ip_forward = 1
-net.ipv4.conf.all.forwarding = 1
-net.ipv4.conf.default.forwarding = 1' /etc/sysctl.conf
-sysctl -p >/dev/null 2>&1
+socks5_egress_stop(){
+  systemctl stop de_GWD-socks5-egress >/dev/null 2>&1 || true
+  systemctl disable de_GWD-socks5-egress >/dev/null 2>&1 || true
+  if [[ -x $DE_GWD_SOCKS5_POSTDOWN ]]; then
+    "$DE_GWD_SOCKS5_POSTDOWN" >/dev/null 2>&1 || true
+  fi
+  mkdir -p -- "$(dirname -- "$DE_GWD_SOCKS5_EGRESS_SETTINGS")" 2>/dev/null || true
+  if [[ -f $DE_GWD_SOCKS5_EGRESS_SETTINGS ]]; then
+    local tmp
+    tmp=$(mktemp "${DE_GWD_SOCKS5_EGRESS_SETTINGS}.tmp.XXXXXX") 2>/dev/null || return 0
+    jq '.enabled = false' "$DE_GWD_SOCKS5_EGRESS_SETTINGS" > "$tmp" 2>/dev/null && mv -f "$tmp" "$DE_GWD_SOCKS5_EGRESS_SETTINGS" || rm -f "$tmp"
+  else
+    printf '{"enabled":false}\n' > "$DE_GWD_SOCKS5_EGRESS_SETTINGS" 2>/dev/null || true
+  fi
+}
 
-rm -rf /run/resolvconf/interface
-sed -i '/dns-nameservers /d' /etc/network/interfaces
-resolvconf -u
+socks5_egress_start(){
+  local server=$1
+  local port=$2
+  local user=${3:-}
+  local pass=${4:-}
 
-/etc/rc_online.local
+  socks5_egress_valid_server "$server" || return 1
+  socks5_egress_valid_port "$port" || return 1
 
-rm -rf /tmp/WGCFstart
-EOF
-chmod +x /tmp/WGCFstart
+  if ! socks5_egress_test_connectivity "$server" "$port" "$user" "$pass"; then
+    echo -e "${RED}Failed to reach SOCKS5 upstream $server:$port! Connection test failed.${cRES}"
+    return 1
+  fi
 
-screen -dmS WGCFstart /tmp/WGCFstart
-sleep 3
+  socks5_egress_render_scripts "$server" "$port" || return 1
+  socks5_egress_render_service "$server" "$port" "$user" "$pass" || return 1
 
-wanIP=$(curl -4sSL whatismyip.akamai.com | grep -Po '\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}')
-[[ -z $wanIP ]] && wanIP=$(curl -4sSL ifconfig.me | grep -Po '\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}')
+  systemctl daemon-reload >/dev/null 2>&1 || true
+  systemctl enable de_GWD-socks5-egress >/dev/null 2>&1 || true
+  if ! systemctl restart de_GWD-socks5-egress >/dev/null 2>&1; then
+    socks5_egress_stop
+    return 1
+  fi
 
-echo -e "${BLUE}------------------------------------------------------------- ${cRES}"
-[[ $localAddrIPv4 != $wanIP ]] && echo -e "${WHITE}[ ${GREEN}✓ ${WHITE}]\c" && echo -e "\t${WHITE}Cloudflare wireguard upstream (WARP) ${GREEN}Enabled${cRES}"
-[[ $localAddrIPv4 == $wanIP ]] && echo -e "${WHITE}[ ${RED}✕ ${WHITE}]\c" && echo -e "\t${WHITE}Cloudflare wireguard upstream (WARP) ${RED}Failed${cRES}"
-echo -e "${BLUE}------------------------------------------------------------- ${cRES}"
-else
-echo -e "${WHITE}[ ${RED}✕ ${WHITE}]\c" && echo -e "\t${RED}This vps has no IPv4 address${cRES}"
-fi
-fi
-elif [[ $WGCFswitch = "2" ]]; then
-cat << "EOF" >/tmp/WGCFstop
-#!/bin/bash
-systemctl stop wg-quick@wgcf
-systemctl disable wg-quick@wgcf
+  mkdir -p -- "$(dirname -- "$DE_GWD_SOCKS5_EGRESS_SETTINGS")" || return 1
+  local tmpCfg
+  tmpCfg=$(mktemp "${DE_GWD_SOCKS5_EGRESS_SETTINGS}.tmp.XXXXXX") || return 1
+  jq -cn \
+    --arg srv "$server" \
+    --argjson port "$port" \
+    --arg usr "$user" \
+    --arg pwd "$pass" \
+    '{enabled:true, server:$srv, port:$port, user:$usr, password:$pwd}' > "$tmpCfg" || { rm -f "$tmpCfg"; return 1; }
+  chmod 0600 "$tmpCfg"
+  mv -f -- "$tmpCfg" "$DE_GWD_SOCKS5_EGRESS_SETTINGS" || return 1
+  return 0
+}
 
-rm -rf /run/resolvconf/interface
-sed -i '/dns-nameservers /d' /etc/network/interfaces
-resolvconf -u
+changeSocks5Egress(){
+  echo -e "${GREEN}=================================================== ${cRES}"
+  echo -e "${GREEN}[1]: Enable System SOCKS5 Upstream Egress ${cRES}"
+  echo -e "${GREEN}[2]: Disable System SOCKS5 Upstream Egress ${cRES}"
+  echo -e "${GREEN}[3]: Check System SOCKS5 Upstream Egress Status ${cRES}"
+  echo -e "${GREEN}=================================================== ${cRES}"
+  read -r -p "Select [1-3]: " socksSwitch
 
-/etc/rc_online.local
+  if [[ $socksSwitch == "1" ]]; then
+    local oldServer oldPort oldUser oldPass
+    if [[ -f $DE_GWD_SOCKS5_EGRESS_SETTINGS ]]; then
+      oldServer=$(jq -r '.server // empty' "$DE_GWD_SOCKS5_EGRESS_SETTINGS" 2>/dev/null)
+      oldPort=$(jq -r '.port // empty' "$DE_GWD_SOCKS5_EGRESS_SETTINGS" 2>/dev/null)
+      oldUser=$(jq -r '.user // empty' "$DE_GWD_SOCKS5_EGRESS_SETTINGS" 2>/dev/null)
+      oldPass=$(jq -r '.password // empty' "$DE_GWD_SOCKS5_EGRESS_SETTINGS" 2>/dev/null)
+    fi
 
-rm -rf /tmp/WGCFstop
-EOF
-chmod +x /tmp/WGCFstop
+    read -r -p "SOCKS5 server host/IP [${oldServer:-127.0.0.1}]: " inServer
+    inServer=${inServer:-${oldServer:-127.0.0.1}}
+    socks5_egress_valid_server "$inServer" || { echo -e "${RED}Invalid SOCKS5 server address${cRES}"; return 1; }
 
-screen -dmS WGCFstop /tmp/WGCFstop
+    read -r -p "SOCKS5 port [${oldPort:-1080}]: " inPort
+    inPort=${inPort:-${oldPort:-1080}}
+    socks5_egress_valid_port "$inPort" || { echo -e "${RED}Invalid SOCKS5 port (1-65535)${cRES}"; return 1; }
 
-echo -e "${WHITE}[ ${RED}✕ ${WHITE}]\c" && echo -e "\t${WHITE}Cloudflare wireguard upstream (WARP) ${RED}Disabled${cRES}"
-fi
+    read -r -p "SOCKS5 username (optional) [${oldUser:-}]: " inUser
+    inUser=${inUser:-${oldUser:-}}
+
+    read -r -s -p "SOCKS5 password (optional): " inPass
+    echo
+    inPass=${inPass:-${oldPass:-}}
+
+    echo -e "${WHITE}[...${WHITE}]\c" && echo -e "\t${WHITE}Connecting and verifying SOCKS5 upstream egress...${cRES}\r\c"
+    if socks5_egress_start "$inServer" "$inPort" "$inUser" "$inPass"; then
+      echo -e "${WHITE}[ ${GREEN}✓ ${WHITE}]\c" && echo -e "\t${WHITE}System SOCKS5 Upstream Egress ${GREEN}Enabled${cRES}"
+    else
+      echo -e "${WHITE}[ ${RED}✕ ${WHITE}]\c" && echo -e "\t${WHITE}System SOCKS5 Upstream Egress ${RED}Failed & Rolled Back${cRES}"
+    fi
+  elif [[ $socksSwitch == "2" ]]; then
+    socks5_egress_stop
+    echo -e "${WHITE}[ ${RED}✕ ${WHITE}]\c" && echo -e "\t${WHITE}System SOCKS5 Upstream Egress ${RED}Disabled${cRES}"
+  elif [[ $socksSwitch == "3" ]]; then
+    if [[ $(jq -r '.enabled // false' "$DE_GWD_SOCKS5_EGRESS_SETTINGS" 2>/dev/null) = "true" ]] || systemctl is-active --quiet de_GWD-socks5-egress 2>/dev/null; then
+      local srv port
+      srv=$(jq -r '.server // empty' "$DE_GWD_SOCKS5_EGRESS_SETTINGS" 2>/dev/null)
+      port=$(jq -r '.port // empty' "$DE_GWD_SOCKS5_EGRESS_SETTINGS" 2>/dev/null)
+      echo -e "${GREEN}System SOCKS5 Egress is active via $srv:$port.${cRES}"
+      local outIP
+      outIP=$(curl -4sSL --connect-timeout 3 ifconfig.me 2>/dev/null || true)
+      [[ -n $outIP ]] && echo -e "Current Outbound IP: ${YELLOW}$outIP${cRES}"
+    else
+      echo -e "${YELLOW}System SOCKS5 Egress is disabled.${cRES}"
+    fi
+  fi
 }
 
 
 
-changeTCPPF(){
-    echo -e "${GREEN}============================ ${cRES}"
-    echo -e "${GREEN}[1]: Set TCP Port Forward${cRES}"
-    echo -e "${GREEN}[2]: Delete TCP Port Forward${cRES}"
-    echo -e "${GREEN}============================ ${cRES}"
-    read -s -n 1 tcpPFsw
-    echo -e "${WHITE}[...${WHITE}]\c" && echo -e "\t${WHITE}Modifying TCP Port Forward settings${cRES}\r\c"
+RproxyS_valid_uuid(){
+[[ $1 =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]]
+}
 
-if [[ $tcpPFsw = "1" ]]; then
-    echo -e "${GREEN}======================= ${cRES}"
-    echo -e "${GREEN}Upstream Domain & Port${cRES}"
-    echo -e "${GREEN}======================= ${cRES}"
-    read upDomainP
 
-    echo -e "${GREEN}======================= ${cRES}"
-    echo -e "${GREEN}Local Port${cRES}"
-    echo -e "${GREEN}======================= ${cRES}"
-    read localP
+RproxyS_valid_port(){
+[[ $1 =~ ^[1-9][0-9]{0,4}$ ]] && (( $1 <= 65535 ))
+}
 
-upDomain=$(echo $upDomainP | cut -d: -f1)
-upPort=$(echo $upDomainP | cut -d: -f2| grep '^[[:digit:]]*$')
 
+RproxySsave(){
+local settings=/opt/de_GWD/RproxyS/settings.json
+local runtime=/opt/de_GWD/RproxyS
+local binary=/opt/de_GWD/vtrui/vtrui
+local tunnelPort tunnelUUID enabled clients mappingList len i uuid mappingPort mappingProtocol
+local configTmp configNext serviceTmp
+local mappingPorts=""
+
+[[ -f $settings ]] || return 1
+if ! jq -e . "$settings" >/dev/null 2>&1; then
+  echo -e "${WHITE}RproxyS settings${RED} Invalid JSON${cRES}"
+  return 1
+fi
+
+enabled=$(jq -r 'if .enabled == false then "false" else "true" end' "$settings") || return 1
+[[ $enabled = "false" ]] && return 0
+[[ -x $binary ]] || { echo -e "${WHITE}RproxyS${RED} requires Xray binary${cRES}"; return 1; }
+
+tunnelPort=$(jq -r '.port // empty' "$settings")
+tunnelUUID=$(jq -r '.uuid // empty' "$settings")
+RproxyS_valid_port "$tunnelPort" || { echo -e "${WHITE}RproxyS${RED} invalid tunnel port${cRES}"; return 1; }
+RproxyS_valid_uuid "$tunnelUUID" || { echo -e "${WHITE}RproxyS${RED} invalid tunnel UUID${cRES}"; return 1; }
+
+if ! jq -e '(.clients // []) | type == "array"' "$settings" >/dev/null 2>&1 ||
+   ! jq -e '(.mapping // []) | type == "array"' "$settings" >/dev/null 2>&1; then
+  echo -e "${WHITE}RproxyS settings${RED} clients/mapping must be arrays${cRES}"
+  return 1
+fi
+
+clients=$(jq -r '(.clients // []) | unique[]? // empty' "$settings") || return 1
+while IFS= read -r uuid; do
+  [[ -z $uuid ]] && continue
+  RproxyS_valid_uuid "$uuid" || { echo -e "${WHITE}RproxyS${RED} invalid client UUID${cRES}"; return 1; }
+done <<< "$clients"
+
+mappingList=$(jq -c '.mapping // []' "$settings") || return 1
+len=$(jq length <<< "$mappingList") || return 1
+for (( i=0; i<len; i++ )); do
+  mappingPort=$(jq -r --argjson i "$i" '.[$i].port // empty' <<< "$mappingList")
+  mappingProtocol=$(jq -r --argjson i "$i" '.[$i].protocol // empty' <<< "$mappingList")
+  RproxyS_valid_port "$mappingPort" || { echo -e "${WHITE}RproxyS${RED} invalid mapping port${cRES}"; return 1; }
+  [[ $mappingPort != "$tunnelPort" ]] || { echo -e "${WHITE}RproxyS${RED} mapping port conflicts with tunnel port${cRES}"; return 1; }
+  [[ $mappingProtocol = "tcp" || $mappingProtocol = "udp" || $mappingProtocol = "tcp,udp" ]] || {
+    echo -e "${WHITE}RproxyS${RED} invalid mapping protocol${cRES}"
+    return 1
+  }
+  [[ ",${mappingPorts}," = *",${mappingPort},"* ]] && {
+    echo -e "${WHITE}RproxyS${RED} duplicate mapping port${cRES}"
+    return 1
+  }
+  mappingPorts="${mappingPorts},${mappingPort}"
+done
+
+configTmp=$(mktemp /tmp/de_GWD-RproxyS-config.XXXXXX.json) || return 1
+configNext="${configTmp}.next"
+if ! jq -n --argjson port "$tunnelPort" --arg uuid "$tunnelUUID" '
+{
+  "log":{"access":"none","error":"none","loglevel":"none"},
+  "dns":{"queryStrategy":"UseIP","disableCache":true,"servers":["tcp+local://127.0.0.1:53"]},
+  "routing":{"rules":[
+    {"type":"field","inboundTag":["reverseTunnel"],"domain":["full:reverse.localhost"],"outboundTag":"portal"},
+    {"type":"field","inboundTag":["reverseTunnel"],"outboundTag":"portal"}
+  ]},
+  "reverse":{"portals":[{"tag":"portal","domain":"reverse.localhost"}]},
+  "inbounds":[{
+    "tag":"reverseTunnel",
+    "port":$port,
+    "protocol":"vmess",
+    "settings":{"clients":[{"id":$uuid,"alterId":0}]},
+    "streamSettings":{"network":"tcp"}
+  }]
+}' >"$configTmp"; then
+  rm -f "$configTmp" "$configNext"
+  return 1
+fi
+
+while IFS= read -r uuid; do
+  [[ -z $uuid || $uuid = "$tunnelUUID" ]] && continue
+  if ! jq --arg id "$uuid" '.inbounds[0].settings.clients += [{"id":$id,"alterId":0}]' "$configTmp" >"$configNext" ||
+     ! mv -f "$configNext" "$configTmp"; then
+    rm -f "$configTmp" "$configNext"
+    return 1
+  fi
+done <<< "$clients"
+
+for (( i=0; i<len; i++ )); do
+  mappingPort=$(jq -r --argjson i "$i" '.[$i].port' <<< "$mappingList")
+  mappingProtocol=$(jq -r --argjson i "$i" '.[$i].protocol' <<< "$mappingList")
+  if ! jq --argjson port "$mappingPort" --arg protocol "$mappingProtocol" --arg tag "mapping$i" '
+    .routing.rules += [{"type":"field","inboundTag":[$tag],"outboundTag":"portal"}]
+    | .inbounds += [{"tag":$tag,"port":$port,"protocol":"dokodemo-door","settings":{"address":"127.0.0.1","port":$port,"network":$protocol}}]
+  ' "$configTmp" >"$configNext"; then
+    rm -f "$configTmp" "$configNext"
+    return 1
+  fi
+  mv -f "$configNext" "$configTmp" || {
+    rm -f "$configTmp" "$configNext"
+    return 1
+  }
+done
+
+jq -e . "$configTmp" >/dev/null 2>&1 || {
+  rm -f "$configTmp" "$configNext"
+  return 1
+}
+if ! "$binary" run -test -config "$configTmp" >/dev/null 2>&1; then
+  echo -e "${WHITE}RproxyS config${RED} validation failed${cRES}"
+  rm -f "$configTmp" "$configNext"
+  return 1
+fi
+
+mkdir -p "$runtime" || { rm -f "$configTmp" "$configNext"; return 1; }
+systemctl stop RproxyS >/dev/null 2>&1 || true
+install -m 0755 "$binary" "$runtime/RproxyS" || { rm -f "$configTmp" "$configNext"; return 1; }
+install -m 0600 "$configTmp" "$runtime/config.json" || { rm -f "$configTmp" "$configNext"; return 1; }
+rm -f "$configTmp" "$configNext"
+
+serviceTmp=$(mktemp /tmp/de_GWD-RproxyS-service.XXXXXX) || return 1
+cat << "EOF" >"$serviceTmp"
+[Unit]
+Description=de_GWD RproxyS reverse proxy
+After=network.target nss-lookup.target
+
+[Service]
+User=root
+Type=simple
+ExecStart=/opt/de_GWD/RproxyS/RproxyS run -config /opt/de_GWD/RproxyS/config.json
+Restart=always
+RestartSec=2
+TimeoutStopSec=5
+
+AmbientCapabilities=CAP_NET_RAW CAP_NET_ADMIN CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_RAW CAP_NET_ADMIN CAP_NET_BIND_SERVICE
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
+EOF
+if ! install -m 0644 "$serviceTmp" /etc/systemd/system/RproxyS.service; then
+  rm -f "$serviceTmp"
+  return 1
+fi
+rm -f "$serviceTmp"
+
+systemctl daemon-reload >/dev/null 2>&1 || return 1
+systemctl enable RproxyS >/dev/null 2>&1 || return 1
+if ! systemctl restart RproxyS >/dev/null 2>&1 || ! systemctl is-active --quiet RproxyS; then
+  echo -e "${WHITE}RproxyS${RED} start failed${cRES}"
+  return 1
+fi
+return 0
+}
+
+
+RproxySstop(){
+local settings=/opt/de_GWD/RproxyS/settings.json
+local settingsTmp
+
+systemctl disable --now RproxyS >/dev/null 2>&1 || true
+rm -f /etc/systemd/system/RproxyS.service /lib/systemd/system/RproxyS.service
+rm -f /opt/de_GWD/RproxyS/RproxyS /opt/de_GWD/RproxyS/config.json
+
+if [[ -f $settings ]]; then
+  settingsTmp=$(mktemp /tmp/de_GWD-RproxyS-settings.XXXXXX) || return 1
+  if ! jq '.enabled=false' "$settings" >"$settingsTmp" || ! install -m 0600 "$settingsTmp" "$settings"; then
+    rm -f "$settingsTmp"
+    return 1
+  fi
+  rm -f "$settingsTmp"
+fi
+systemctl daemon-reload >/dev/null 2>&1 || return 1
+return 0
+}
+
+
+printRproxyS(){
+local settings=/opt/de_GWD/RproxyS/settings.json
+local domain port uuid clients
+
+[[ -f $settings ]] || return 1
+[[ $(jq -r 'if .enabled == false then "false" else "true" end' "$settings" 2>/dev/null) = "true" ]] || return 1
+domain=$(awk '/server_name/ {print $2;exit}' /etc/nginx/conf.d/default.conf 2>/dev/null | sed 's/[;.]$//')
+[[ -n $domain ]] || domain="server-domain"
+port=$(jq -r '.port // empty' "$settings" 2>/dev/null)
+uuid=$(jq -r '.uuid // empty' "$settings" 2>/dev/null)
+
+echo -e "${BLUE}------------------------------------------------ ${cRES}"
+echo -e "${GREEN}RproxyS Reverse Proxy${cRES}"
+echo -e "${BLUE}Address:       ${YELLOW}$domain:$port${cRES}"
+echo -e "${BLUE}Tunnel UUID:   ${YELLOW}$uuid${cRES}"
+echo -e "${BLUE}Tunnel URL:    ${YELLOW}vmess://$uuid@$domain:$port?encryption=auto&type=tcp&tfo=1#$domain:$port${cRES}"
+clients=$(jq -r '.clients[]? // empty' "$settings" 2>/dev/null)
+if [[ -n $clients ]]; then
+  echo -e "${BLUE}Client UUIDs:${cRES}"
+  while IFS= read -r uuid; do
+    [[ -z $uuid ]] && continue
+    echo -e "  ${YELLOW}$uuid${cRES}"
+    echo -e "  ${YELLOW}vmess://$uuid@$domain:$port?encryption=auto&type=tcp&tfo=1#$domain:$port${cRES}"
+  done <<< "$clients"
+fi
+jq -r '.mapping[]? | "Mapping: \(.port)/\(.protocol)"' "$settings" 2>/dev/null
+echo -e "${BLUE}------------------------------------------------ ${cRES}"
+}
+
+
+changeRproxyS(){
+local settings=/opt/de_GWD/RproxyS/settings.json
+local oldPort oldUUID oldClients oldMapping switch RproxyStunnelPort RproxyStunnelUUID RproxySClients RproxySMappings
+local temp backup clientUUID mapping mappingPort mappingProtocol clientUUIDs mappings
+
+oldPort=$(jq -r '.port // empty' "$settings" 2>/dev/null)
+oldUUID=$(jq -r '.uuid // empty' "$settings" 2>/dev/null)
+oldClients=$(jq -r '.clients[]? // empty' "$settings" 2>/dev/null | paste -sd, -)
+oldMapping=$(jq -r '.mapping[]? | "\(.port)/\(.protocol)"' "$settings" 2>/dev/null | paste -sd, -)
+
+echo -e "${GREEN}============================ ${cRES}"
+echo -e "${GREEN}[1]: Enable/configure RproxyS${cRES}"
+echo -e "${GREEN}[2]: Disable RproxyS${cRES}"
+echo -e "${GREEN}[3]: Show RproxyS settings${cRES}"
+echo -e "${GREEN}============================ ${cRES}"
+read -r -n 1 switch
+echo
+
+if [[ $switch = "2" ]]; then
+  RproxySstop || return 1
+  echo -e "${WHITE}[ ${GREEN}✓ ${WHITE}]\c" && echo -e "\t${WHITE}RproxyS ${RED}Disabled${cRES}"
+  return 0
+fi
+if [[ $switch = "3" ]]; then
+  printRproxyS || echo -e "${YELLOW}RproxyS is not enabled${cRES}"
+  return 0
+fi
+[[ $switch = "1" ]] || return 0
+[[ -x /opt/de_GWD/vtrui/vtrui ]] || { echo -e "${RED}Install de_GWD first${cRES}"; return 1; }
+
+read -r -p "RproxyS listen port [$oldPort]: " RproxyStunnelPort
+RproxyStunnelPort=${RproxyStunnelPort:-$oldPort}
+RproxyStunnelPort=${RproxyStunnelPort:-20000}
+RproxyS_valid_port "$RproxyStunnelPort" || { echo -e "${RED}Invalid port${cRES}"; return 1; }
+
+read -r -p "RproxyS UUID [$oldUUID]: " RproxyStunnelUUID
+RproxyStunnelUUID=${RproxyStunnelUUID:-$oldUUID}
+RproxyStunnelUUID=${RproxyStunnelUUID:-$(cat /proc/sys/kernel/random/uuid)}
+RproxyS_valid_uuid "$RproxyStunnelUUID" || { echo -e "${RED}Invalid UUID${cRES}"; return 1; }
+
+read -r -p "Extra client UUIDs, comma separated [$oldClients] (use - to clear): " RproxySClients
+if [[ $RproxySClients = "-" ]]; then
+  RproxySClients=""
+else
+  RproxySClients=${RproxySClients:-$oldClients}
+fi
+read -r -p "Server mappings, port/protocol comma separated [$oldMapping] (use - to clear): " RproxySMappings
+if [[ $RproxySMappings = "-" ]]; then
+  RproxySMappings=""
+else
+  RproxySMappings=${RproxySMappings:-$oldMapping}
+fi
+
+temp=$(mktemp /tmp/de_GWD-RproxyS-settings.XXXXXX) || return 1
+if ! jq -n --argjson port "$RproxyStunnelPort" --arg uuid "$RproxyStunnelUUID" \
+  '{enabled:true,port:$port,uuid:$uuid,clients:[],mapping:[]}' >"$temp"; then
+  rm -f "$temp"
+  return 1
+fi
+
+IFS=',' read -r -a clientUUIDs <<< "$RproxySClients"
+for clientUUID in "${clientUUIDs[@]}"; do
+  clientUUID=${clientUUID//[[:space:]]/}
+  [[ -z $clientUUID ]] && continue
+  RproxyS_valid_uuid "$clientUUID" || { rm -f "$temp"; echo -e "${RED}Invalid client UUID${cRES}"; return 1; }
+  if ! jq --arg id "$clientUUID" '.clients += [$id]' "$temp" | sponge "$temp"; then
+    rm -f "$temp"
+    return 1
+  fi
+done
+
+IFS=',' read -r -a mappings <<< "$RproxySMappings"
+for mapping in "${mappings[@]}"; do
+  mapping=${mapping//[[:space:]]/}
+  [[ -z $mapping ]] && continue
+  mappingPort=${mapping%%/*}
+  mappingProtocol=${mapping#*/}
+  RproxyS_valid_port "$mappingPort" || { rm -f "$temp"; echo -e "${RED}Invalid mapping: $mapping${cRES}"; return 1; }
+  [[ $mappingPort != "$RproxyStunnelPort" ]] || { rm -f "$temp"; echo -e "${RED}Mapping conflicts with tunnel port${cRES}"; return 1; }
+  [[ $mappingProtocol = "tcp" || $mappingProtocol = "udp" || $mappingProtocol = "tcp,udp" ]] || {
+    rm -f "$temp"
+    echo -e "${RED}Invalid mapping protocol${cRES}"
+    return 1
+  }
+  if ! jq --argjson port "$mappingPort" --arg protocol "$mappingProtocol" \
+    '.mapping += [{port:$port,protocol:$protocol}]' "$temp" | sponge "$temp"; then
+    rm -f "$temp"
+    return 1
+  fi
+done
+
+mkdir -p /opt/de_GWD/RproxyS || { rm -f "$temp"; return 1; }
+if [[ -f $settings ]]; then
+  backup=$(mktemp /tmp/de_GWD-RproxyS-settings-backup.XXXXXX) || { rm -f "$temp"; return 1; }
+  cp -f "$settings" "$backup" || { rm -f "$temp" "$backup"; return 1; }
+else
+  backup=""
+fi
+mv -f "$temp" "$settings"
+chmod 0600 "$settings"
+
+if ! RproxySsave; then
+  if [[ -n $backup ]]; then
+    mv -f "$backup" "$settings"
+    chmod 0600 "$settings"
+    RproxySsave >/dev/null 2>&1 || true
+  else
+    rm -f "$settings"
+  fi
+  echo -e "${RED}RproxyS start failed${cRES}"
+  return 1
+fi
+[[ -n $backup ]] && rm -f "$backup"
+printRproxyS
+echo -e "${WHITE}[ ${GREEN}✓ ${WHITE}]\c" && echo -e "\t${WHITE}RproxyS ${GREEN}Enabled${cRES}"
+}
+
+
+# Menu 44: multi-rule HAProxy TCP forwarding (public local port -> upstream host:port).
+# Rules are kept separately from RproxyS mappings so one server can expose several
+# independent TCP forwards without overwriting the previous HAProxy frontend.
+tcppf_settings=${DE_GWD_TCPPF_SETTINGS}
+
+tcppf_write_settings(){
+local content=$1 temp
+mkdir -p -- "$(dirname -- "$DE_GWD_TCPPF_SETTINGS")" || return 1
+temp=$(mktemp "${DE_GWD_TCPPF_SETTINGS}.tmp.XXXXXX") || return 1
+if ! printf '%s\n' "$content" >"$temp" || ! chmod 0600 "$temp" || ! mv -f -- "$temp" "$DE_GWD_TCPPF_SETTINGS"; then
+  rm -f -- "$temp"
+  return 1
+fi
+}
+
+tcppf_load(){
+local rules='[]' feName bind localP up parsed host upPort
+mkdir -p -- "$(dirname -- "$DE_GWD_TCPPF_SETTINGS")" || return 1
+if [[ ! -f $DE_GWD_TCPPF_SETTINGS ]]; then
+  # Migrate the original single-frontend configuration once, if it exists.
+  if [[ -f $DE_GWD_HAPROXY_CONFIG ]]; then
+    while IFS= read -r feName; do
+      [[ -n $feName ]] || continue
+      bind=$(awk -v name="$feName" '
+        $1 == "frontend" && $2 == name {inside=1; next}
+        inside && $1 == "frontend" {exit}
+        inside && $1 == "bind" {print $2; exit}
+      ' "$DE_GWD_HAPROXY_CONFIG" 2>/dev/null)
+      localP=${bind##*:}
+      up=$(awk -v name="$feName" '
+        $1 == "backend" && $2 == name {inside=1; next}
+        inside && $1 == "backend" {exit}
+        inside && $1 == "server" && $2 == "endpoint" {print $3; exit}
+      ' "$DE_GWD_HAPROXY_CONFIG" 2>/dev/null)
+      [[ $localP =~ ^[0-9]+$ ]] && (( localP >= 1 && localP <= 65535 )) || continue
+      parsed=$(parseDomainPort "$up" 2>/dev/null) || continue
+      host=; upPort=
+      read -r host upPort <<<"$parsed"
+      [[ -n $host && $upPort =~ ^[0-9]+$ ]] && (( upPort >= 1 && upPort <= 65535 )) || continue
+      up=$(formatDomainPort "$host" "$upPort")
+      if ! jq -e --argjson lp "$localP" '.[] | select(.localPort == $lp)' <<<"$rules" >/dev/null 2>&1; then
+        rules=$(jq -c --argjson lp "$localP" --arg upstream "$up" '. + [{localPort:$lp, upstream:$upstream}]' <<<"$rules") || return 1
+      fi
+    done < <(awk '$1 == "frontend" {print $2}' "$DE_GWD_HAPROXY_CONFIG" 2>/dev/null)
+  fi
+  tcppf_write_settings "$(jq -cn --argjson rules "$rules" '{rules:$rules}')" || return 1
+fi
+if ! jq -e '.rules | type == "array"' "$DE_GWD_TCPPF_SETTINGS" >/dev/null 2>&1; then
+  echo -e "${RED}TCP Port Forward settings are invalid${cRES}" >&2
+  return 1
+fi
+TCPPFrules=$(jq -c '.rules' "$DE_GWD_TCPPF_SETTINGS") || return 1
+}
+
+tcppf_validate_rules(){
+local n i localP upstream parsed host upPort
+n=$(jq 'length' <<<"${TCPPFrules:-[]}" 2>/dev/null) || return 1
+for (( i=0; i<n; i++ )); do
+  localP=$(jq -r --argjson i "$i" '.[$i].localPort // empty' <<<"$TCPPFrules")
+  upstream=$(jq -r --argjson i "$i" '.[$i].upstream // empty' <<<"$TCPPFrules")
+  [[ $localP =~ ^[0-9]+$ ]] && (( localP >= 1 && localP <= 65535 )) || {
+    echo -e "${RED}Invalid TCP forward local port${cRES}" >&2
+    return 1
+  }
+  parsed=$(parseDomainPort "$upstream" 2>/dev/null) || {
+    echo -e "${RED}Invalid TCP forward upstream${cRES}" >&2
+    return 1
+  }
+  host=; upPort=
+  read -r host upPort <<<"$parsed"
+  [[ -n $host && $upPort =~ ^[0-9]+$ ]] && (( upPort >= 1 && upPort <= 65535 )) || {
+    echo -e "${RED}TCP forward upstream must be host:port${cRES}" >&2
+    return 1
+  }
+  if jq -e --argjson lp "$localP" --argjson i "$i" '.[:$i] | any(.[]?; .localPort == $lp)' <<<"$TCPPFrules" >/dev/null 2>&1; then
+    echo -e "${RED}Duplicate TCP forward local port: $localP${cRES}" >&2
+    return 1
+  fi
+done
+return 0
+}
+
+tcppf_port_available(){
+local candidate=$1 settings usedPort mainPort tunnelPort mappingPort
+mainPort=${port:-$(awk '$1 == "listen" && $2 ~ /^[1-9][0-9]{0,4}$/ && $3 == "default" {print $2; exit}' "$DE_GWD_NGINX_CONF_DIR/default.conf" 2>/dev/null)}
+[[ $candidate = "$mainPort" || $candidate = "9890" || $candidate = "9891" ]] && return 1
+for settings in "$DE_GWD_DATA_DIR/vless.json" "$DE_GWD_DATA_DIR/reality.json" "$DE_GWD_DATA_DIR/socks5.json" "$DE_GWD_DATA_DIR/dokodemo.json"; do
+  [[ -f $settings ]] || continue
+  usedPort=$(jq -r '.port // empty' "$settings" 2>/dev/null)
+  [[ $candidate = "$usedPort" ]] && return 1
+done
+settings="$DE_GWD_DATA_DIR/RproxyS/settings.json"
+if [[ -f $settings ]]; then
+  tunnelPort=$(jq -r '.port // empty' "$settings" 2>/dev/null)
+  [[ $candidate = "$tunnelPort" ]] && return 1
+  while IFS= read -r mappingPort; do
+    [[ $candidate = "$mappingPort" ]] && return 1
+  done < <(jq -r '.mapping[]?.port // empty' "$settings" 2>/dev/null)
+fi
+return 0
+}
+
+tcppf_install_haproxy(){
+if [[ $DE_GWD_TEST_MODE = 1 ]]; then
+  return 0
+fi
 unset aptPKG
-[[ -z $(dpkg -l | awk '{print$2}' | grep '^haproxy$') ]] && aptPKG+=(haproxy)
-[[ -n $aptPKG ]] && apt update && apt install $(echo ${aptPKG[@]})
+[[ -z $(dpkg -l 2>/dev/null | awk '{print$2}' | grep '^haproxy$') ]] && aptPKG+=(haproxy)
+if [[ -n ${aptPKG:-} ]]; then
+  apt update && apt install -y "${aptPKG[@]}" || return 1
+fi
+mkdir -p -- "$(dirname -- "$DE_GWD_HAPROXY_SERVICE")" || return 1
+cat >"$DE_GWD_HAPROXY_SERVICE" <<EOF
+[Unit]
+Description=HAProxy
+After=network.target rsyslog.service
 
-cat << EOF >/etc/haproxy/haproxy.cfg
+[Service]
+User=root
+Type=notify
+EnvironmentFile=-/etc/default/haproxy
+Environment="CONFIG=$DE_GWD_HAPROXY_CONFIG" "PIDFILE=/run/haproxy.pid"
+ExecStartPre=/usr/sbin/haproxy -f \$CONFIG -c -q \$EXTRAOPTS
+ExecStart=/usr/sbin/haproxy -Ws -f \$CONFIG -p \$PIDFILE \$EXTRAOPTS
+ExecReload=/usr/sbin/haproxy -f \$CONFIG -c -q \$EXTRAOPTS
+ExecReload=/bin/kill -USR2 \$MAINPID
+KillMode=mixed
+Restart=always
+RestartSec=2
+TimeoutStopSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+systemctl daemon-reload >/dev/null 2>&1 || return 1
+}
+
+tcppf_render_config(){
+local temp i n localP upstream name configDir
+configDir=$(dirname -- "$DE_GWD_HAPROXY_CONFIG")
+mkdir -p -- "$configDir" || return 1
+temp=$(mktemp "${DE_GWD_HAPROXY_CONFIG}.tmp.XXXXXX") || return 1
+cat >"$temp" <<'EOF'
 global
   ulimit-n              500000
   maxconn               200000
@@ -1811,68 +3448,281 @@ resolvers local
   timeout retry         3s
   hold valid            10s
   accepted_payload_size 8192
+EOF
+n=$(jq 'length' <<<"$TCPPFrules") || { rm -f -- "$temp"; return 1; }
+for (( i=0; i<n; i++ )); do
+  localP=$(jq -r --argjson i "$i" '.[$i].localPort' <<<"$TCPPFrules")
+  upstream=$(jq -r --argjson i "$i" '.[$i].upstream' <<<"$TCPPFrules")
+  name="p${localP}"
+  cat >>"$temp" <<EOF
 
-frontend $upDomain
+frontend $name
   bind                  :$localP
-  default_backend       $upDomain
+  default_backend       $name
 
-backend $upDomain
-  server endpoint $upDomainP check resolvers local init-addr none
+backend $name
+  server endpoint $upstream check resolvers local init-addr none
 EOF
+done
+chmod 0644 "$temp" && mv -f -- "$temp" "$DE_GWD_HAPROXY_CONFIG" || {
+  rm -f -- "$temp"
+  return 1
+}
+}
 
-
-rm -rf /lib/systemd/system/haproxy.service
-cat << "EOF" >/etc/systemd/system/haproxy.service
-[Unit]
-Description=HAProxy
-After=network.target rsyslog.service
-
-[Service]
-User=root
-Type=notify
-EnvironmentFile=-/etc/default/haproxy
-Environment="CONFIG=/etc/haproxy/haproxy.cfg" "PIDFILE=/run/haproxy.pid"
-ExecStartPre=/usr/sbin/haproxy -f $CONFIG -c -q $EXTRAOPTS
-ExecStart=/usr/sbin/haproxy -Ws -f $CONFIG -p $PIDFILE $EXTRAOPTS
-ExecReload=/usr/sbin/haproxy -f $CONFIG -c -q $EXTRAOPTS
-ExecReload=$(which kill) -USR2 $MAINPID
-KillMode=mixed
-Restart=always
-RestartSec=2
-TimeoutStopSec=5
-
-[Install]
-WantedBy=multi-user.target
-EOF
-systemctl daemon-reload >/dev/null
-systemctl enable haproxy >/dev/null 2>&1
-systemctl restart haproxy
-
-domain=$(awk '/server_name/ {print$2;exit}' /etc/nginx/conf.d/default.conf | sed 's/.$//')
-
-echo -e "${BLUE}------------------------------------------------ ${cRES}"
-echo -e "${GREEN}TCP Port Forward${cRES}"
-echo
-echo -e "${BLUE}Address:       ${YELLOW}$domain:$localP${cRES}"
-echo -e "${BLUE}tls:           ${YELLOW}$upDomain${cRES}"
-echo -e "${BLUE}------------------------------------------------ ${cRES}"
-echo
-echo -e "${WHITE}[ ${GREEN}✓ ${WHITE}]\c" && echo -e "\t${WHITE}TCP Port Forward ${GREEN}Deployed${cRES}"
-elif [[ $tcpPFsw = "2" ]]; then
-systemctl stop haproxy
-systemctl disable haproxy
-
-rm -rf /etc/haproxy/haproxy.cfg >/dev/null 2>&1
-
-echo -e "${WHITE}[ ${GREEN}✓ ${WHITE}]\c" && echo -e "\t${WHITE}TCP Port Forward ${GREEN}Deleted${cRES}"
+tcppf_apply_runtime(){
+local n checkLog
+tcppf_load || return 1
+tcppf_validate_rules || return 1
+n=$(jq 'length' <<<"$TCPPFrules") || return 1
+if (( n == 0 )); then
+  systemctl stop haproxy >/dev/null 2>&1 || true
+  systemctl disable haproxy >/dev/null 2>&1 || true
+  rm -f -- "$DE_GWD_HAPROXY_CONFIG"
+  return 0
+fi
+tcppf_install_haproxy || return 1
+tcppf_render_config || return 1
+checkLog=$(mktemp "${DE_GWD_TXN_TMPDIR:-/tmp}/de_GWD-haproxy-check.XXXXXX") || return 1
+if ! "$DE_GWD_HAPROXY_BIN" -f "$DE_GWD_HAPROXY_CONFIG" -c -q >"$checkLog" 2>&1; then
+  echo -e "${WHITE}[ ${RED}✕ ${WHITE}]\c" && echo -e "\t${WHITE}HAProxy config invalid${cRES}" >&2
+  sed -n '1,15p' "$checkLog" >&2
+  rm -f -- "$checkLog"
+  return 1
+fi
+rm -f -- "$checkLog"
+systemctl enable haproxy >/dev/null 2>&1 || return 1
+systemctl restart haproxy >/dev/null 2>&1 || return 1
+if ! systemctl is-active --quiet haproxy; then
+  echo -e "${WHITE}[ ${RED}✕ ${WHITE}]\c" && echo -e "\t${WHITE}HAProxy failed to start${cRES}" >&2
+  systemctl status haproxy --no-pager -l 2>&1 | sed -n '1,15p' >&2
+  return 1
 fi
 }
 
+tcppf_apply_candidate(){
+local candidate=$1
+mv -f -- "$candidate" "$DE_GWD_TCPPF_SETTINGS" || return 1
+tcppf_apply_runtime
+}
 
+tcppf_apply_transaction(){
+local candidate=$1
+configTransaction "haproxy" tcppf_apply_candidate \
+  "$DE_GWD_TCPPF_SETTINGS" \
+  "$DE_GWD_HAPROXY_CONFIG" \
+  "$DE_GWD_HAPROXY_SERVICE" \
+  -- "$candidate"
+}
+
+tcppf_apply(){
+tcppf_apply_runtime
+}
+
+tcppf_list(){
+local domain n i localP upstream
+tcppf_load || return 1
+tcppf_validate_rules || return 1
+domain=$(getServerDomain 2>/dev/null || true)
+[[ -n $domain ]] || domain="0.0.0.0"
+n=$(jq 'length' <<<"$TCPPFrules") || return 1
+echo -e "${GREEN}================================================ ${cRES}"
+echo -e "${GREEN} TCP Port Forward (multi)${cRES}"
+echo -e "${GREEN}================================================ ${cRES}"
+if (( n == 0 )); then
+  echo -e "${YELLOW}(empty)${cRES}"
+else
+  printf '%-4s %-24s %s\n' "ID" "Public" "Upstream"
+  for (( i=0; i<n; i++ )); do
+    localP=$(jq -r --argjson i "$i" '.[$i].localPort' <<<"$TCPPFrules")
+    upstream=$(jq -r --argjson i "$i" '.[$i].upstream' <<<"$TCPPFrules")
+    printf '%-4s %-24s %s\n' "$((i + 1))" "$domain:$localP" "$upstream"
+  done
+fi
+echo -e "${GREEN}================================================ ${cRES}"
+}
+
+tcppf_add(){
+local upDomainP localP parsed host upPort candidate
+tcppf_load || return 1
+tcppf_validate_rules || return 1
+echo -e "${GREEN}======================= ${cRES}"
+echo -e "${GREEN}Upstream Domain & Port${cRES}"
+echo -e "${GREEN}(host:port or [IPv6]:port)${cRES}"
+echo -e "${GREEN}======================= ${cRES}"
+read -r upDomainP
+parsed=$(parseDomainPort "$upDomainP" 2>/dev/null) || {
+  echo -e "${WHITE}[ ${RED}✕ ${WHITE}]\c" && echo -e "\t${WHITE}Upstream must be host:port${cRES}"
+  return 1
+}
+host=; upPort=
+read -r host upPort <<<"$parsed"
+if [[ -z $host || ! $upPort =~ ^[0-9]+$ ]] || (( upPort < 1 || upPort > 65535 )); then
+  echo -e "${WHITE}[ ${RED}✕ ${WHITE}]\c" && echo -e "\t${WHITE}Upstream must be host:port${cRES}"
+  return 1
+fi
+upDomainP=$(formatDomainPort "$host" "$upPort")
+echo -e "${GREEN}======================= ${cRES}"
+echo -e "${GREEN}Local Port${cRES}"
+echo -e "${GREEN}======================= ${cRES}"
+read -r localP
+if [[ ! $localP =~ ^[0-9]{1,5}$ ]]; then
+  echo -e "${WHITE}[ ${RED}✕ ${WHITE}]\c" && echo -e "\t${WHITE}Invalid local port${cRES}"
+  return 1
+fi
+localP=$((10#$localP))
+if (( localP < 1 || localP > 65535 )); then
+  echo -e "${WHITE}[ ${RED}✕ ${WHITE}]\c" && echo -e "\t${WHITE}Invalid local port${cRES}"
+  return 1
+fi
+if ! tcppf_port_available "$localP"; then
+  echo -e "${WHITE}[ ${RED}✕ ${WHITE}]\c" && echo -e "\t${WHITE}Local port $localP is already in use${cRES}"
+  return 1
+fi
+if jq -e --argjson lp "$localP" '.[] | select(.localPort == $lp)' <<<"$TCPPFrules" >/dev/null 2>&1; then
+  echo -e "${WHITE}[ ${RED}✕ ${WHITE}]\c" && echo -e "\t${WHITE}Local port $localP already exists${cRES}"
+  return 1
+fi
+candidate=$(mktemp "${DE_GWD_TXN_TMPDIR:-/tmp}/de_GWD-tcppf-candidate.XXXXXX") || return 1
+if ! jq --argjson lp "$localP" --arg upstream "$upDomainP" \
+  '.rules += [{localPort:$lp, upstream:$upstream}]' "$DE_GWD_TCPPF_SETTINGS" >"$candidate"; then
+  rm -f -- "$candidate"
+  return 1
+fi
+if ! tcppf_apply_transaction "$candidate"; then
+  rm -f -- "$candidate"
+  return 1
+fi
+rm -f -- "$candidate"
+echo -e "${BLUE}------------------------------------------------ ${cRES}"
+echo -e "${GREEN}TCP Port Forward${cRES}"
+echo -e "${BLUE}Upstream:      ${YELLOW}$upDomainP${cRES}"
+echo -e "${BLUE}Local port:    ${YELLOW}$localP${cRES}"
+echo -e "${BLUE}------------------------------------------------ ${cRES}"
+echo -e "${WHITE}[ ${GREEN}✓ ${WHITE}]\c" && echo -e "\t${WHITE}TCP Port Forward ${GREEN}Added${cRES}"
+}
+
+tcppf_del(){
+local n delID index i localP candidate
+tcppf_load || return 1
+tcppf_validate_rules || return 1
+n=$(jq 'length' <<<"$TCPPFrules") || return 1
+if (( n == 0 )); then
+  echo -e "${WHITE}[ ${YELLOW}! ${WHITE}]\c" && echo -e "\t${WHITE}No TCP Port Forward rules${cRES}"
+  return 1
+fi
+tcppf_list || return 1
+read -r -p "Delete ID or local port (all = delete all): " delID
+if [[ $delID = all ]]; then
+  tcppf_del_all
+  return $?
+fi
+index=
+if [[ $delID =~ ^[0-9]+$ ]]; then
+  for (( i=0; i<n; i++ )); do
+    if [[ $(jq -r --argjson i "$i" '.[$i].localPort' <<<"$TCPPFrules") = "$delID" ]]; then
+      index=$i
+      break
+    fi
+  done
+  if [[ -z $index ]] && (( delID >= 1 && delID <= n )); then
+    index=$((delID - 1))
+  fi
+fi
+if [[ -z $index ]]; then
+  echo -e "${WHITE}[ ${RED}✕ ${WHITE}]\c" && echo -e "\t${WHITE}Invalid ID or local port${cRES}"
+  return 1
+fi
+candidate=$(mktemp "${DE_GWD_TXN_TMPDIR:-/tmp}/de_GWD-tcppf-candidate.XXXXXX") || return 1
+if ! jq --argjson i "$index" 'del(.rules[$i])' "$DE_GWD_TCPPF_SETTINGS" >"$candidate" || ! tcppf_apply_transaction "$candidate"; then
+  rm -f -- "$candidate"
+  return 1
+fi
+rm -f -- "$candidate"
+echo -e "${WHITE}[ ${GREEN}✓ ${WHITE}]\c" && echo -e "\t${WHITE}TCP Port Forward ${GREEN}Deleted${cRES}"
+}
+
+tcppf_del_all(){
+local candidate
+tcppf_load || return 1
+candidate=$(mktemp "${DE_GWD_TXN_TMPDIR:-/tmp}/de_GWD-tcppf-candidate.XXXXXX") || return 1
+printf '%s\n' '{"rules":[]}' >"$candidate"
+if ! tcppf_apply_transaction "$candidate"; then
+  rm -f -- "$candidate"
+  return 1
+fi
+rm -f -- "$candidate"
+echo -e "${WHITE}[ ${GREEN}✓ ${WHITE}]\c" && echo -e "\t${WHITE}All TCP Port Forward ${GREEN}Deleted${cRES}"
+}
+
+changeTCPPF(){
+local tcpPFsw
+while true; do
+  clear
+  tcppf_list || return 1
+  echo -e "${GREEN}1. Add TCP Port Forward${cRES}"
+  echo -e "${GREEN}2. Delete one rule${cRES}"
+  echo -e "${GREEN}3. Delete all${cRES}"
+  echo -e "${GREEN}0. Back${cRES}"
+  echo -e "${GREEN}================================================ ${cRES}"
+  read -r -p "Select: " tcpPFsw
+  case "$tcpPFsw" in
+    1) tcppf_add; read -r -n 1 -s -p "Press any key..."; echo ;;
+    2) tcppf_del; read -r -n 1 -s -p "Press any key..."; echo ;;
+    3) tcppf_del_all; read -r -n 1 -s -p "Press any key..."; echo ;;
+    0) break ;;
+    *) ;;
+  esac
+done
+}
+
+
+vmessURL(){
+local vmessJSON
+vmessJSON=$(jq -cn \
+  --arg remark "$7" \
+  --arg address "$1" \
+  --arg port "$2" \
+  --arg uuid "$3" \
+  --arg network "$4" \
+  --arg host "$5" \
+  --arg path "$6" \
+  --arg tls "$5" \
+  '{
+    v:"2",
+    ps:$remark,
+    add:$address,
+    port:$port,
+    id:$uuid,
+    aid:"0",
+    scy:"auto",
+    net:$network,
+    type:"none",
+    host:$host,
+    path:$path,
+    tls:(if $tls == "" then "" else "tls" end),
+    sni:$tls
+  }')
+echo "vmess://$(printf '%s' "$vmessJSON" | base64 -w0)"
+}
+
+vlessURL(){
+local pathEncoded
+pathEncoded=$(printf '%s' "$4" | jq -sRr @uri)
+printf 'vless://%s@%s:%s?encryption=none&security=tls&type=ws&host=%s&sni=%s&path=%s#%s\n' "$3" "$1" "$2" "$1" "$1" "$pathEncoded" "$5"
+}
+
+vlessRealityURL(){
+printf 'vless://%s@%s:%s?encryption=none&security=reality&sni=%s&fp=chrome&pbk=%s&sid=%s&flow=xtls-rprx-vision&type=tcp#%s\n' "$3" "$1" "$2" "$4" "$5" "$6" "$7"
+}
 
 printNode(){
-vpsdomain=$(awk '/server_name/ {print$2;exit}' /etc/nginx/conf.d/default.conf | sed 's/.$//')
-port=$(awk '/ssl .* reuseport/ {print$2}' /etc/nginx/conf.d/default.conf)
+local domain=""
+local nodeUUID
+vpsdomain=$(getServerDomain 2>/dev/null || true)
+[[ $vpsdomain =~ ^[A-Za-z0-9.-]+$ ]] || { echo -e "${RED}Server domain is unavailable${cRES}"; return 1; }
+port=$(awk '$1 == "listen" && $2 + 0 > 0 && $2 + 0 <= 65535 && $3 == "default" {print $2; exit}' "$DE_GWD_NGINX_CONF_DIR/default.conf" 2>/dev/null)
+port=${port:-443}
 
 if [[ $port = "443" ]]; then
 vpsdomainP=$vpsdomain
@@ -1880,20 +3730,20 @@ else
 vpsdomainP=$vpsdomain:$port
 fi
 
-path=$(jq -r '.inbounds[0].streamSettings.wsSettings.path' /opt/de_GWD/vtrui/config.json 2>/dev/null | grep -v '^null$')
-uuids=$(jq -r '.inbounds[0].settings.clients[].id' /opt/de_GWD/vtrui/config.json 2>/dev/null | grep -v '^null$')
+path=$(jq -r '.inbounds[0].streamSettings.wsSettings.path' "$DE_GWD_XRAY_DIR/config.json" 2>/dev/null | grep -v '^null$')
+uuids=$(jq -r '.inbounds[0].settings.clients[].id' "$DE_GWD_XRAY_DIR/config.json" 2>/dev/null | grep -v '^null$')
+nodeUUID=$(printf '%s\n' "$uuids" | head -n 1)
 
 if [[ $(systemctl is-active 'haproxy') == "active" ]]; then
 echo -e "${BLUE}-------------------------------------------------- ${cRES}"
 echo -e "${GREEN}HAProxy TCP Port Forward${cRES}"
 echo
-awk '/frontend/' /etc/haproxy/haproxy.cfg | while read line; do
-upDomain=$(echo $line | awk '{print$2}')
-localPort=$(awk "/frontend $upDomain/{getline; print}" /etc/haproxy/haproxy.cfg | cut -d: -f2)
-upDomainP=$(awk "/backend $upDomain/{getline; print\$3}" /etc/haproxy/haproxy.cfg)
+awk '$1 == "frontend" {print $2}' "$DE_GWD_HAPROXY_CONFIG" 2>/dev/null | while read -r relay; do
+localPort=$(awk -v relay="$relay" '$1 == "frontend" && $2 == relay {getline; sub(/^:/, "", $2); print $2; exit}' "$DE_GWD_HAPROXY_CONFIG" 2>/dev/null)
+upDomainP=$(awk -v relay="$relay" '$1 == "backend" && $2 == relay {getline; print $3; exit}' "$DE_GWD_HAPROXY_CONFIG" 2>/dev/null)
 
 echo -e "${BLUE}Address:       ${YELLOW}$vpsdomain:$localPort${cRES}"
-echo -e "${BLUE}tls:           ${YELLOW}$upDomain${cRES}"
+echo -e "${BLUE}Upstream:      ${YELLOW}$upDomainP${cRES}"
 echo
 done
 fi
@@ -1902,14 +3752,134 @@ echo -e "${BLUE}-------------------------------------------------- ${cRES}"
 echo -e "${GREEN}Node Information${cRES}"
 echo
 echo -e "${BLUE}DoH:       ${YELLOW}$vpsdomainP/dq${cRES}"
-echo -e "${BLUE}Address:   ${YELLOW}$vpsdomainP${cRES}"
-echo -e "${BLUE}UUID:      ${YELLOW}$uuids${cRES}"
-echo -e "${BLUE}Path:      ${YELLOW}$path${cRES}"
+if [[ $nodeUUID =~ ^[0-9A-Fa-f-]{36}$ && $path == /* ]]; then
+  echo -e "${BLUE}Address:   ${YELLOW}$vpsdomainP${cRES}"
+  echo -e "${BLUE}UUID:      ${YELLOW}$nodeUUID${cRES}"
+  echo -e "${BLUE}Path:      ${YELLOW}$path${cRES}"
+  echo
+  echo -e "${BLUE}QR code: ${cRES}"
+  subUrl=$(vmessURL "$vpsdomain" "$port" "$nodeUUID" "ws" "$vpsdomain" "$path" "$vpsdomain:$port")
+  qrencode -t UTF8 -s 1 -m 3 "$subUrl"
+  echo
+  echo -e "${YELLOW}$subUrl${cRES}"
+fi
+
+if [[ $(jq -r '.enabled // false' "$DE_GWD_DATA_DIR/vless.json" 2>/dev/null) = "true" ]]; then
+vlessDomain=$(jq -r '.domain // empty' "$DE_GWD_DATA_DIR/vless.json" 2>/dev/null)
+vlessPort=$(jq -r '.port // empty' "$DE_GWD_DATA_DIR/vless.json" 2>/dev/null)
+vlessUUID=$(jq -r '.uuid // empty' "$DE_GWD_DATA_DIR/vless.json" 2>/dev/null)
+vlessPath=$(jq -r '.path // empty' "$DE_GWD_DATA_DIR/vless.json" 2>/dev/null)
+echo -e "${BLUE}-------------------------------------------------- ${cRES}"
+echo -e "${GREEN}VLESS Node Information${cRES}"
 echo
+echo -e "${BLUE}Address:   ${YELLOW}$vlessDomain:$vlessPort${cRES}"
+echo -e "${BLUE}UUID:      ${YELLOW}$vlessUUID${cRES}"
+echo -e "${BLUE}Path:      ${YELLOW}$vlessPath${cRES}"
+echo
+vlessUrl=$(vlessURL "$vlessDomain" "$vlessPort" "$vlessUUID" "$vlessPath" "$vlessDomain:$vlessPort")
 echo -e "${BLUE}QR code: ${cRES}"
-subAddr=$(echo -n "$(jq -r '.inbounds[0].settings.clients[0].id' /opt/de_GWD/vtrui/config.json 2>/dev/null | grep -v '^null$')@$vpsdomain:$port")
-subUrl="vmess://${subAddr}?encryption=auto&type=ws&security=tls&tlsAllowInsecure=false&path=${path}&host=${vpsdomain}&sni=${vpsdomain}&tfo=1#${vpsdomain}:${port}"
-qrencode -t UTF8 -s 1 -m 3 $subUrl
+qrencode -t UTF8 -s 1 -m 3 "$vlessUrl"
+echo
+echo -e "${YELLOW}$vlessUrl${cRES}"
+echo
+fi
+
+if [[ $(jq -r '.enabled // false' "$DE_GWD_DATA_DIR/reality.json" 2>/dev/null) = "true" ]]; then
+realityDomain=$(jq -r '.domain // empty' "$DE_GWD_DATA_DIR/reality.json" 2>/dev/null)
+realityPort=$(jq -r '.port // empty' "$DE_GWD_DATA_DIR/reality.json" 2>/dev/null)
+realityUUID=$(jq -r '.uuid // empty' "$DE_GWD_DATA_DIR/reality.json" 2>/dev/null)
+realityDest=$(jq -r '.dest // empty' "$DE_GWD_DATA_DIR/reality.json" 2>/dev/null)
+realityServerName=$(jq -r '.serverName // empty' "$DE_GWD_DATA_DIR/reality.json" 2>/dev/null)
+realityPublicKey=$(jq -r '.publicKey // empty' "$DE_GWD_DATA_DIR/reality.json" 2>/dev/null)
+realityShortId=$(jq -r '.shortId // empty' "$DE_GWD_DATA_DIR/reality.json" 2>/dev/null)
+echo -e "${BLUE}-------------------------------------------------- ${cRES}"
+echo -e "${GREEN}VLESS REALITY Node Information${cRES}"
+echo
+echo -e "${BLUE}Address:   ${YELLOW}$realityDomain:$realityPort${cRES}"
+echo -e "${BLUE}UUID:      ${YELLOW}$realityUUID${cRES}"
+echo -e "${BLUE}Flow:      ${YELLOW}xtls-rprx-vision${cRES}"
+echo -e "${BLUE}Dest:      ${YELLOW}$realityDest${cRES}"
+echo -e "${BLUE}ServerName:${YELLOW}$realityServerName${cRES}"
+echo -e "${BLUE}PublicKey: ${YELLOW}$realityPublicKey${cRES}"
+echo -e "${BLUE}ShortId:   ${YELLOW}$realityShortId${cRES}"
+realityUrl=$(vlessRealityURL "$realityDomain" "$realityPort" "$realityUUID" "$realityServerName" "$realityPublicKey" "$realityShortId" "$realityDomain:$realityPort")
+echo -e "${BLUE}QR code: ${cRES}"
+qrencode -t UTF8 -s 1 -m 3 "$realityUrl"
+echo
+echo -e "${YELLOW}$realityUrl${cRES}"
+echo
+fi
+
+if [[ $(jq -r '.enabled // false' "$DE_GWD_DATA_DIR/socks5.json" 2>/dev/null) = "true" ]]; then
+socksDomain=$(jq -r '.domain // empty' "$DE_GWD_DATA_DIR/socks5.json" 2>/dev/null)
+[[ $socksDomain =~ ^[A-Za-z0-9.-]+$ ]] || socksDomain=$(getServerDomain 2>/dev/null || true)
+socksPort=$(jq -r '.port // empty' "$DE_GWD_DATA_DIR/socks5.json" 2>/dev/null)
+socksUser=$(jq -r '.user // empty' "$DE_GWD_DATA_DIR/socks5.json" 2>/dev/null)
+socksPassword=$(jq -r '.password // empty' "$DE_GWD_DATA_DIR/socks5.json" 2>/dev/null)
+if [[ $socksDomain =~ ^[A-Za-z0-9.-]+$ ]]; then
+  echo -e "${BLUE}-------------------------------------------------- ${cRES}"
+  echo -e "${GREEN}SOCKS5 Node Information${cRES}"
+  echo
+  echo -e "${BLUE}Address:  ${YELLOW}$socksDomain:$socksPort${cRES}"
+  echo -e "${BLUE}User:     ${YELLOW}$socksUser${cRES}"
+  echo -e "${BLUE}Password: ${YELLOW}$socksPassword${cRES}"
+  socksUrl="socks5://$socksUser:$socksPassword@$socksDomain:$socksPort#SOCKS5"
+  echo -e "${BLUE}QR code: ${cRES}"
+  qrencode -t UTF8 -s 1 -m 3 "$socksUrl"
+  echo
+  echo -e "${YELLOW}$socksUrl${cRES}"
+  echo
+fi
+fi
+
+if [[ $(jq -r '.enabled // false' "$DE_GWD_DATA_DIR/dokodemo.json" 2>/dev/null) = "true" ]]; then
+dokodemoDomain=$(jq -r '.domain // empty' "$DE_GWD_DATA_DIR/dokodemo.json" 2>/dev/null)
+dokodemoPort=$(jq -r '.port // empty' "$DE_GWD_DATA_DIR/dokodemo.json" 2>/dev/null)
+dokodemoTarget=$(jq -r '.target // empty' "$DE_GWD_DATA_DIR/dokodemo.json" 2>/dev/null)
+dokodemoTargetPort=$(jq -r '.targetPort // empty' "$DE_GWD_DATA_DIR/dokodemo.json" 2>/dev/null)
+dokodemoNetwork=$(jq -r '.network // empty' "$DE_GWD_DATA_DIR/dokodemo.json" 2>/dev/null)
+echo -e "${BLUE}-------------------------------------------------- ${cRES}"
+echo -e "${GREEN}dokodemo-door Node Information${cRES}"
+echo
+echo -e "${BLUE}Address: ${YELLOW}$dokodemoDomain:$dokodemoPort${cRES}"
+echo -e "${BLUE}Target:  ${YELLOW}$(formatDomainPort "$dokodemoTarget" "$dokodemoTargetPort")${cRES}"
+echo -e "${BLUE}Network: ${YELLOW}$dokodemoNetwork${cRES}"
+echo
+fi
+
+if [[ -f $DE_GWD_TCPPF_SETTINGS ]] && jq -e '.rules | length > 0' "$DE_GWD_TCPPF_SETTINGS" >/dev/null 2>&1; then
+  echo -e "${BLUE}-------------------------------------------------- ${cRES}"
+  echo -e "${GREEN}HAProxy TCP Forward Rules${cRES}"
+  echo
+  pf_count=$(jq '.rules | length' "$DE_GWD_TCPPF_SETTINGS")
+  for (( pf_i=0; pf_i<pf_count; pf_i++ )); do
+    lPort=$(jq -r --argjson i "$pf_i" '.rules[$i].localPort' "$DE_GWD_TCPPF_SETTINGS")
+    uStream=$(jq -r --argjson i "$pf_i" '.rules[$i].upstream' "$DE_GWD_TCPPF_SETTINGS")
+    echo -e "${BLUE}Forward: ${YELLOW}:$lPort${cRES} -> ${YELLOW}$uStream${cRES}"
+  done
+  echo
+fi
+
+if [[ $(jq -r '.enabled // false' "$DE_GWD_WARP_SETTINGS" 2>/dev/null) = "true" ]] || systemctl is-active --quiet wg-quick@wgcf 2>/dev/null; then
+  warp_m=$(jq -r '.mode // "ipv4"' "$DE_GWD_WARP_SETTINGS" 2>/dev/null)
+  echo -e "${BLUE}-------------------------------------------------- ${cRES}"
+  echo -e "${GREEN}Cloudflare WARP (Table 51820)${cRES}"
+  echo
+  echo -e "${BLUE}Status: ${GREEN}Active${cRES} (${YELLOW}$warp_m${cRES})"
+  echo
+fi
+
+if [[ $(jq -r '.enabled // false' "$DE_GWD_SOCKS5_EGRESS_SETTINGS" 2>/dev/null) = "true" ]] || systemctl is-active --quiet de_GWD-socks5-egress 2>/dev/null; then
+  eg_srv=$(jq -r '.server // empty' "$DE_GWD_SOCKS5_EGRESS_SETTINGS" 2>/dev/null)
+  eg_port=$(jq -r '.port // empty' "$DE_GWD_SOCKS5_EGRESS_SETTINGS" 2>/dev/null)
+  echo -e "${BLUE}-------------------------------------------------- ${cRES}"
+  echo -e "${GREEN}System SOCKS5 Upstream Egress${cRES}"
+  echo
+  echo -e "${BLUE}Status:   ${GREEN}Active${cRES}"
+  echo -e "${BLUE}Upstream: ${YELLOW}$eg_srv:$eg_port${cRES}"
+  echo
+fi
+
 echo
 echo -e "${BLUE}-------------------------------------------------- ${cRES}"
 }
@@ -1922,8 +3892,13 @@ installGWD(){
     echo -e "${GREEN}================== ${cRES}"
     read vpsdomainP
 
+if [[ -f "/opt/de_GWD/RproxyS/settings.json" ]]; then
+  systemctl disable --now RproxyS >/dev/null 2>&1 || true
+fi
+
 domain=$(echo $vpsdomainP | cut -d: -f1)
 topDomain=$(getTopDomain "$domain")
+[[ $topDomain != *.* ]] && topDomain=""
 port=$(echo $vpsdomainP | cut -d: -f2 | grep '^[[:digit:]]*$')
 [[ -z $port ]] && port="443"
 
@@ -1982,7 +3957,7 @@ sed -i "s/ bullseye / bookworm /g" /etc/apt/sources.list.d/* >/dev/null 2>&1
 apt update --fix-missing && apt upgrade --allow-downgrades -y
 apt full-upgrade -y && apt autoremove --purge -y && apt clean -y && apt autoclean -y
 
-preInstall
+preInstall || exit 1
 
 [[ $virt_type != "container" ]] && installNftables
 
@@ -1995,9 +3970,9 @@ installNginx
 installXray
 
 if [[ $port == "443" ]]; then
-makeSSL_W || return 1
+makeSSL_W || exit 1
 else
-makeSSL_D || return 1
+makeSSL_D || exit 1
 fi
 
 nginxWebConf
@@ -2006,7 +3981,12 @@ XrayInbound
 
 XrayOutboundDirect
 
-postInstall
+if [[ -f "/opt/de_GWD/RproxyS/settings.json" ]] && ! RproxySsave; then
+  echo -e "${WHITE}RproxyS${RED} Start Failed${cRES}"
+  exit 1
+fi
+
+postInstall || exit 1
 
 enableAutoUpdate
 
@@ -2022,7 +4002,7 @@ updateGWD(){
 
 preUpdate
 
-preInstall
+preInstall || exit 1
 
 [[ $virt_type != "container" ]] && installNftables
 
@@ -2040,9 +4020,15 @@ XrayInbound
 
 XrayOutboundDirect
 
-postInstall
+if [[ -f "/opt/de_GWD/RproxyS/settings.json" ]] && ! RproxySsave; then
+  echo -e "${WHITE}RproxyS${RED} Start Failed${cRES}"
+  exit 1
+fi
+
+postInstall || exit 1
 
 echo -e "${WHITE}[ ${GREEN}✓ ${WHITE}]\c" && echo -e "\t${WHITE}de_GWD ${GREEN}Updated${cRES}"
+
 }
 
 
@@ -2050,9 +4036,8 @@ echo -e "${WHITE}[ ${GREEN}✓ ${WHITE}]\c" && echo -e "\t${WHITE}de_GWD ${GREEN
 enableAutoUpdate(){
 cat << "EOF" >/opt/de_GWD/autoUpdate
 #!/bin/bash
-branch="dev"
 localVer=$(awk 'NR==1' /opt/de_GWD/version.php)
-remoteVer=$(curl -fsSLo- https://raw.githubusercontent.com/stuinx/deGWD/$branch/version.php | head -n 1)
+remoteVer=$(curl -fsSLo- https://raw.githubusercontent.com/stuinx/deGWD/main/version.php | head -n 1)
 
 echo $localVer >/tmp/de_GWD_Ver
 echo $remoteVer >>/tmp/de_GWD_Ver
@@ -2061,7 +4046,7 @@ VerCP=$(cat /tmp/de_GWD_Ver | sort -rV | uniq | awk NR==2)
 
 if [[ $VerCP == $localVer ]]; then
 rm -rf /tmp/autoUpdate
-wget -t 5 -T 10 -cqO /tmp/autoUpdate https://raw.githubusercontent.com/stuinx/deGWD/$branch/server
+wget -t 5 -T 10 -cqO /tmp/autoUpdate https://raw.githubusercontent.com/stuinx/deGWD/main/server
 
 if [[ $(du -sk /tmp/autoUpdate 2>/dev/null | awk '{print$1}') -gt 70 ]]; then
 sed -i '$d' /tmp/autoUpdate
@@ -2177,6 +4162,11 @@ echo -e "${BLUE}$virt${cRES}"
 [[ -f "/opt/de_GWD/version.php" ]] && echo -e "${BLUE}Version: ${YELLOW}$(echo $(awk 'NR==1' /opt/de_GWD/version.php)) ${cRES}"
 [[ $(systemctl is-active 'wg-quick@wgcf') = "active" ]] && echo -e "${PURPLE}[Enabled] Cloudflare wireguard upstream (WARP) ${cRES}"
 [[ $(systemctl is-active 'haproxy') = "active" ]] && echo -e "${PURPLE}[Enabled] HAProxy TCP Port Forward${cRES}"
+[[ $(systemctl is-active 'RproxyS') = "active" ]] && echo -e "${PURPLE}[Enabled] RproxyS reverse proxy${cRES}"
+[[ $(jq -r '.enabled // false' "$DE_GWD_DATA_DIR/vless.json" 2>/dev/null) = "true" ]] && echo -e "${PURPLE}[Enabled] VLESS WebSocket TLS${cRES}"
+[[ $(jq -r '.enabled // false' "$DE_GWD_DATA_DIR/reality.json" 2>/dev/null) = "true" ]] && echo -e "${PURPLE}[Enabled] VLESS TCP/RAW REALITY${cRES}"
+[[ $(jq -r '.enabled // false' "$DE_GWD_DATA_DIR/socks5.json" 2>/dev/null) = "true" ]] && echo -e "${PURPLE}[Enabled] SOCKS5${cRES}"
+[[ $(jq -r '.enabled // false' "$DE_GWD_DATA_DIR/dokodemo.json" 2>/dev/null) = "true" ]] && echo -e "${PURPLE}[Enabled] dokodemo-door${cRES}"
 
 if [[ $virt_type = "container" ]]; then
  echo -e "${BLUE}---------------------------------------------------------------- ${cRES}"
@@ -2205,6 +4195,8 @@ echo -e "${YELLOW}0. Update de_GWD${cRES}"
  echo -e "${GREEN}11.Print Xray node information${cRES}"
  echo -e "${GREEN}12.Localhost cloudflare speedtest${cRES}"
   echo -e "${CYAN}44.Set TCP Port Forward${cRES}"
+  echo -e "${CYAN}55.Set RproxyS reverse proxy${cRES}"
+  echo -e "${CYAN}66.Add Xray protocol${cRES}"
 echo -e "${RED}CTRL+C EXIT${cRES}"
 echo
 read -p "Select:" num
@@ -2244,6 +4236,14 @@ read -p "Select:" num
     changeTCPPF
     start_menu
     ;;
+    55)
+    changeRproxyS
+    start_menu
+    ;;
+    66)
+    changeXrayNode
+    start_menu
+    ;;
     *)
     clear
     echo -e "${RED}Wrong number${cRES}"
@@ -2279,7 +4279,10 @@ echo -e "${YELLOW}0. Update de_GWD${cRES}"
  echo -e "${GREEN}11.Print Xray node information${cRES}"
  echo -e "${GREEN}12.Localhost cloudflare speedtest${cRES}"
   echo -e "${CYAN}33.Set Cloudflare wireguard upstream (WARP) ${cRES}"
+  echo -e "${CYAN}35.Set System SOCKS5 Upstream Egress${cRES}"
   echo -e "${CYAN}44.Set TCP Port Forward${cRES}"
+  echo -e "${CYAN}55.Set RproxyS reverse proxy${cRES}"
+  echo -e "${CYAN}66.Add Xray protocol${cRES}"
 echo -e "${RED}CTRL+C EXIT${cRES}"
 echo
 read -p "Select:" num
@@ -2320,8 +4323,20 @@ read -p "Select:" num
     changeWGCF
     start_menu
     ;;
+    35)
+    changeSocks5Egress
+    start_menu
+    ;;
     44)
     changeTCPPF
+    start_menu
+    ;;
+    55)
+    changeRproxyS
+    start_menu
+    ;;
+    66)
+    changeXrayNode
     start_menu
     ;;
     *)
@@ -2334,4 +4349,6 @@ read -p "Select:" num
 fi
 }
 
-start_menu
+if [[ $DE_GWD_TEST_MODE != 1 ]]; then
+  start_menu
+fi
