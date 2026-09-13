@@ -240,37 +240,43 @@ sha256sum_client=$(fetch_sha256 "https://raw.githubusercontent.com/stuinx/deGWD/
 
 if [[ $(checkSum /usr/sbin/nginx $sha256sum_nginx) = "false" ]]; then
 rm -rf /tmp/nginx
-wget --show-progress -cqO /tmp/nginx https://raw.githubusercontent.com/stuinx/deGWD/$branch/resource/nginx/nginx_"$architecture"
+wget --show-progress -cq -T 10 -t 2 -O /tmp/nginx https://raw.githubusercontent.com/stuinx/deGWD/$branch/resource/nginx/nginx_"$architecture" || \
+wget --show-progress -cq -T 10 -t 2 -O /tmp/nginx https://ghproxy.net/https://raw.githubusercontent.com/stuinx/deGWD/$branch/resource/nginx/nginx_"$architecture"
 [[ $(checkSum /tmp/nginx $sha256sum_nginx) = "false" ]] && echo -e "${WHITE}NGINX Core${RED} Download Failed${cRES}" && exit
 [[ $(checkSum /tmp/nginx $sha256sum_nginx) = "true" ]] && mv -f /tmp/nginx /usr/sbin/nginx && chmod +x /usr/sbin/nginx
 fi
 
 if [[ $(checkSum /opt/de_GWD/.repo/nginxConf.zip $sha256sum_nginxConf) = "false" ]]; then
 rm -rf /tmp/nginxConf.zip
-wget --show-progress -cqO /tmp/nginxConf.zip https://raw.githubusercontent.com/stuinx/deGWD/$branch/resource/nginx/nginxConf.zip
+wget --show-progress -cq -T 10 -t 2 -O /tmp/nginxConf.zip https://raw.githubusercontent.com/stuinx/deGWD/$branch/resource/nginx/nginxConf.zip || \
+wget --show-progress -cq -T 10 -t 2 -O /tmp/nginxConf.zip https://ghproxy.net/https://raw.githubusercontent.com/stuinx/deGWD/$branch/resource/nginx/nginxConf.zip
 [[ $(checkSum /tmp/nginxConf.zip $sha256sum_nginxConf) = "false" ]] && echo -e "${RED}Download Failed${cRES}" && exit
 [[ $(checkSum /tmp/nginxConf.zip $sha256sum_nginxConf) = "true" ]] && mv -f /tmp/nginxConf.zip /opt/de_GWD/.repo/nginxConf.zip
 fi
 
 if [[ $(ttyd -v 2>&1 | grep -o '[0-9]\.[0-9]\.[0-9]') != $TTYD_Ver ]]; then
-wget --show-progress -cqO /tmp/ttyd https://github.com/tsl0922/ttyd/releases/download/$TTYD_Ver/ttyd.$(uname -m)
+wget --show-progress -cq -T 10 -t 2 -O /tmp/ttyd https://github.com/tsl0922/ttyd/releases/download/$TTYD_Ver/ttyd.$(uname -m) || \
+wget --show-progress -cq -T 10 -t 2 -O /tmp/ttyd https://ghproxy.net/https://github.com/tsl0922/ttyd/releases/download/$TTYD_Ver/ttyd.$(uname -m)
 [[ $? -ne 0 ]] && echo -e "${WHITE}TTYD${RED} Download Failed${cRES}"
 [[ $(du -sk /tmp/ttyd 2>/dev/null | awk '{print$1}') -gt 1000 ]] && mv -f /tmp/ttyd /usr/bin/ttyd && chmod +x /usr/bin/ttyd && TTYD_UPDATE="true"
 fi
 
 if [[ $(checkSum /opt/de_GWD/.repo/client.zip $sha256sum_client) = "false" ]]; then
 rm -rf /tmp/client.zip
-wget --show-progress -cqO /tmp/client.zip https://raw.githubusercontent.com/stuinx/deGWD/$branch/resource/client/Archive.zip
+wget --show-progress -cq -T 10 -t 2 -O /tmp/client.zip https://raw.githubusercontent.com/stuinx/deGWD/$branch/resource/client/Archive.zip || \
+wget --show-progress -cq -T 10 -t 2 -O /tmp/client.zip https://ghproxy.net/https://raw.githubusercontent.com/stuinx/deGWD/$branch/resource/client/Archive.zip
 [[ $(checkSum /tmp/client.zip $sha256sum_client) = "false" ]] && echo -e "${WHITE}Client Zip${RED} Download Failed${cRES}" && exit
 [[ $(checkSum /tmp/client.zip $sha256sum_client) = "true" ]] && mv -f /tmp/client.zip /opt/de_GWD/.repo/client.zip
 fi
 
 localVer=$(awk 'NR==1' /opt/de_GWD/.repo/version.php 2>/dev/null)
-remoteVer=$(curl -fsSLo- https://raw.githubusercontent.com/stuinx/deGWD/$branch/version.php | head -n 1)
+remoteVer=$(curl -fsSL --connect-timeout 5 --max-time 10 "https://raw.githubusercontent.com/stuinx/deGWD/$branch/version.php" 2>/dev/null | head -n 1)
+[[ -z $remoteVer ]] && remoteVer=$(curl -fsSL --connect-timeout 5 --max-time 10 "https://ghproxy.net/https://raw.githubusercontent.com/stuinx/deGWD/$branch/version.php" 2>/dev/null | head -n 1)
 
-if [[ $localVer != $remoteVer ]] || [[ ! -f '/opt/de_GWD/.repo/version.php' ]]; then
+if [[ -n $remoteVer ]] && { [[ $localVer != $remoteVer ]] || [[ ! -f '/opt/de_GWD/.repo/version.php' ]]; }; then
 rm -rf /opt/de_GWD/.repo/version.php
-wget --show-progress -cqO /opt/de_GWD/.repo/version.php https://raw.githubusercontent.com/stuinx/deGWD/$branch/version.php
+wget --show-progress -cq -T 10 -t 2 -O /opt/de_GWD/.repo/version.php https://raw.githubusercontent.com/stuinx/deGWD/$branch/version.php || \
+wget --show-progress -cq -T 10 -t 2 -O /opt/de_GWD/.repo/version.php https://ghproxy.net/https://raw.githubusercontent.com/stuinx/deGWD/$branch/version.php
 [[ $? -ne 0 ]] && echo -e "${WHITE}Version file${RED} Download Failed${cRES}" && exit
 fi
 
