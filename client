@@ -38,6 +38,16 @@ done
 return 0
 }
 
+fetch_sha256(){
+  local url="$1"
+  local sum
+  sum=$(curl -fsSL --connect-timeout 5 --max-time 10 "$url" 2>/dev/null | awk '{print$1}')
+  if [[ -z "$sum" ]]; then
+    sum=$(curl -fsSL --connect-timeout 5 --max-time 10 "https://ghproxy.net/$url" 2>/dev/null | awk '{print$1}')
+  fi
+  echo "$sum"
+}
+
 pkgDEP1(){
 if [[ $architecture = "arm64" ]];then
 unset Freeze_Package
@@ -194,8 +204,8 @@ fi
 if [[ -f "./de_GWD_$architecture.zip" ]]; then
     mv -f ./de_GWD_$architecture.zip /opt/de_GWD/.repo/de_GWD.zip
 else
-    sha256sum_de_GWD=$(curl -fsSLo- https://raw.githubusercontent.com/stuinx/deGWD/$branch/de_GWD_"$architecture".zip.sha256sum)
-    [[ -z $sha256sum_de_GWD ]] && sha256sum_de_GWD=$(curl -fsSLo- https://ghproxy.net/https://raw.githubusercontent.com/jacyl4/de_GWD/main/de_GWD_"$architecture".zip.sha256sum)
+    sha256sum_de_GWD=$(fetch_sha256 "https://raw.githubusercontent.com/stuinx/deGWD/$branch/de_GWD_${architecture}.zip.sha256sum")
+    [[ -z $sha256sum_de_GWD ]] && sha256sum_de_GWD=$(fetch_sha256 "https://raw.githubusercontent.com/jacyl4/de_GWD/main/de_GWD_${architecture}.zip.sha256sum")
     if [[ -n $sha256sum_de_GWD ]] && [[ $(checkSum /opt/de_GWD/.repo/de_GWD.zip $sha256sum_de_GWD) = "false" ]]; then
     rm -rf /tmp/de_GWD.zip
     wget --no-check-certificate --show-progress -cqO /tmp/de_GWD.zip https://raw.githubusercontent.com/stuinx/deGWD/$branch/de_GWD_"$architecture".zip
@@ -224,9 +234,9 @@ chmod +x /opt/de_GWD/tcpTime
 
 repoDL(){
 echo -e "${WHITE}[...]\c" && echo -e "\t${WHITE}Repo Download${cRES}\r\c"
-sha256sum_nginx=$(curl -fsSLo- https://raw.githubusercontent.com/stuinx/deGWD/$branch/resource/nginx/nginx_"$architecture".sha256sum)
-sha256sum_nginxConf=$(curl -fsSLo- https://raw.githubusercontent.com/stuinx/deGWD/$branch/resource/nginx/nginxConf.zip.sha256sum)
-sha256sum_client=$(curl -fsSLo- https://raw.githubusercontent.com/stuinx/deGWD/$branch/resource/client/Archive.zip.sha256sum)
+sha256sum_nginx=$(fetch_sha256 "https://raw.githubusercontent.com/stuinx/deGWD/$branch/resource/nginx/nginx_${architecture}.sha256sum")
+sha256sum_nginxConf=$(fetch_sha256 "https://raw.githubusercontent.com/stuinx/deGWD/$branch/resource/nginx/nginxConf.zip.sha256sum")
+sha256sum_client=$(fetch_sha256 "https://raw.githubusercontent.com/stuinx/deGWD/$branch/resource/client/Archive.zip.sha256sum")
 
 if [[ $(checkSum /usr/sbin/nginx $sha256sum_nginx) = "false" ]]; then
 rm -rf /tmp/nginx
