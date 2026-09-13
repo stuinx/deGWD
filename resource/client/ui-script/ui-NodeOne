@@ -43,6 +43,12 @@ cat << EOF >/opt/de_GWD/vtrui/config.json
     "settings":{"network":"tcp,udp","followRedirect":true},
     "streamSettings":{"sockopt":{"tproxy":"tproxy","mark":255,"tcpFastOpen":true,"tcpMptcp":true}},
     "sniffing":{"enabled":true,"destOverride":["http","tls","quic"],"routeOnly":true,"metadataOnly":false}
+  },
+  {
+    "port":10808,
+    "listen":"0.0.0.0",
+    "protocol":"socks",
+    "settings":{"auth":"noauth","udp":true}
   }
 ]
 }

@@ -149,6 +149,48 @@ wget --no-check-certificate --show-progress -cqO /tmp/IPchnroute https://ghproxy
 [[ $(checkSum /tmp/IPchnroute $sha256sum_IPchnroute) = "true" ]] && mv -f /tmp/IPchnroute /opt/de_GWD/.repo/IPchnroute
 fi
 
+if [[ ! -s /opt/de_GWD/.repo/geosite.dat ]]; then
+rm -rf /tmp/geosite.dat
+wget --no-check-certificate --show-progress -cqO /tmp/geosite.dat https://ghproxy.net/https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/geosite.dat || \
+wget --no-check-certificate --show-progress -cqO /tmp/geosite.dat https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/geosite.dat
+[[ -s /tmp/geosite.dat ]] && mv -f /tmp/geosite.dat /opt/de_GWD/.repo/geosite.dat
+fi
+
+if [[ ! -s /opt/de_GWD/.repo/geoip.dat ]]; then
+rm -rf /tmp/geoip.dat
+wget --no-check-certificate --show-progress -cqO /tmp/geoip.dat https://ghproxy.net/https://raw.githubusercontent.com/Loyalsoldier/geoip/release/geoip.dat || \
+wget --no-check-certificate --show-progress -cqO /tmp/geoip.dat https://raw.githubusercontent.com/Loyalsoldier/geoip/release/geoip.dat
+[[ -s /tmp/geoip.dat ]] && mv -f /tmp/geoip.dat /opt/de_GWD/.repo/geoip.dat
+fi
+
+if [[ ! -s /opt/de_GWD/.repo/Domains.chn.txt ]]; then
+rm -rf /tmp/Domains.chn.txt
+wget --no-check-certificate --show-progress -cqO /tmp/Domains.chn.txt https://ghproxy.net/https://raw.githubusercontent.com/jacyl4/chnroute/main/mosdns_chnlist/Domains.chn.txt || \
+wget --no-check-certificate --show-progress -cqO /tmp/Domains.chn.txt https://raw.githubusercontent.com/jacyl4/chnroute/main/mosdns_chnlist/Domains.chn.txt
+[[ -s /tmp/Domains.chn.txt ]] && mv -f /tmp/Domains.chn.txt /opt/de_GWD/.repo/Domains.chn.txt
+fi
+
+if [[ ! -s /opt/de_GWD/.repo/Domains.apple.txt ]]; then
+rm -rf /tmp/Domains.apple.txt
+wget --no-check-certificate --show-progress -cqO /tmp/Domains.apple.txt https://ghproxy.net/https://raw.githubusercontent.com/jacyl4/chnroute/main/mosdns_chnlist/Domains.apple.txt || \
+wget --no-check-certificate --show-progress -cqO /tmp/Domains.apple.txt https://raw.githubusercontent.com/jacyl4/chnroute/main/mosdns_chnlist/Domains.apple.txt
+[[ -s /tmp/Domains.apple.txt ]] && mv -f /tmp/Domains.apple.txt /opt/de_GWD/.repo/Domains.apple.txt
+fi
+
+if [[ ! -s /opt/de_GWD/.repo/Domains.games.txt ]]; then
+rm -rf /tmp/Domains.games.txt
+wget --no-check-certificate --show-progress -cqO /tmp/Domains.games.txt https://ghproxy.net/https://raw.githubusercontent.com/jacyl4/chnroute/main/mosdns_chnlist/Domains.games.txt || \
+wget --no-check-certificate --show-progress -cqO /tmp/Domains.games.txt https://raw.githubusercontent.com/jacyl4/chnroute/main/mosdns_chnlist/Domains.games.txt
+[[ -s /tmp/Domains.games.txt ]] && mv -f /tmp/Domains.games.txt /opt/de_GWD/.repo/Domains.games.txt
+fi
+
+if [[ ! -s /opt/de_GWD/.repo/99-bogus-nxdomain.china.conf ]]; then
+rm -rf /tmp/99-bogus-nxdomain.china.conf
+wget --no-check-certificate --show-progress -cqO /tmp/99-bogus-nxdomain.china.conf https://ghproxy.net/https://raw.githubusercontent.com/jacyl4/chnroute/main/mosdns_chnlist/99-bogus-nxdomain.china.conf || \
+wget --no-check-certificate --show-progress -cqO /tmp/99-bogus-nxdomain.china.conf https://raw.githubusercontent.com/jacyl4/chnroute/main/mosdns_chnlist/99-bogus-nxdomain.china.conf
+[[ -s /tmp/99-bogus-nxdomain.china.conf ]] && mv -f /tmp/99-bogus-nxdomain.china.conf /opt/de_GWD/.repo/99-bogus-nxdomain.china.conf
+fi
+
 if [[ -f "./de_GWD_$architecture.zip" ]]; then
     mv -f ./de_GWD_$architecture.zip /opt/de_GWD/.repo/de_GWD.zip
 else
@@ -467,7 +509,8 @@ try_connect() {
     local attempt=1
 
     while [ $attempt -le $attempts ]; do
-        if curl -IsS --connect-timeout "$timeout" --max-time "$timeout" "$url" >/dev/null 2>&1; then
+        if curl -IsS --connect-timeout "$timeout" --max-time "$timeout" "$url" >/dev/null 2>&1 || \
+           curl -IsS --connect-timeout "$timeout" --max-time "$timeout" --socks5 127.0.0.1:10808 "$url" >/dev/null 2>&1; then
             return 0
         fi
         ((attempt++))
@@ -1250,6 +1293,10 @@ echo
 installXray(){
 echo -e "${WHITE}[...]\c" && echo -e "\t${WHITE}Deploy vtrui${cRES}\r\c"
 
+mkdir -p /opt/de_GWD/vtrui
+[[ -s /opt/de_GWD/.repo/geosite.dat ]] && cp -f /opt/de_GWD/.repo/geosite.dat /opt/de_GWD/vtrui/geosite.dat
+[[ -s /opt/de_GWD/.repo/geoip.dat ]] && cp -f /opt/de_GWD/.repo/geoip.dat /opt/de_GWD/vtrui/geoip.dat
+
 cat << EOF >/opt/de_GWD/vtrui/config.json
 {
   "log": {
@@ -1270,6 +1317,12 @@ cat << EOF >/opt/de_GWD/vtrui/config.json
       "protocol":"dokodemo-door",
       "settings":{"network":"tcp,udp","followRedirect":true},
       "streamSettings":{"sockopt":{"tproxy":"tproxy","mark":255,"tcpFastOpen":true,"tcpMptcp":true}}
+    },
+    {
+      "port":10808,
+      "listen":"0.0.0.0",
+      "protocol":"socks",
+      "settings":{"auth":"noauth","udp":true}
     }
   ],
   "outbounds":[
@@ -1703,7 +1756,7 @@ table ip de_GWD {
         chain prerouting {
                 type filter hook prerouting priority -280; policy accept;
                 meta l4proto udp th dport { 53, 5331, 5332, 5341, 9896, 67, 68, 1900, 5350, 5351, 5353 } accept
-                meta l4proto tcp th dport { 53, 5331, 5332, 5341, 9896, 2195, 2196, 2197, 3689, 5223, 5297 } accept
+                meta l4proto tcp th dport { 53, 5331, 5332, 5341, 9896, 10808, 2195, 2196, 2197, 3689, 5223, 5297 } accept
                 ip daddr @GlobalDNS accept
                 ip saddr @listBlan meta l4proto { tcp, udp } tproxy to 127.0.0.1:9896 meta mark set 0x9
                 ip saddr @listWlan accept
@@ -1717,7 +1770,7 @@ table ip de_GWD {
         chain output {
                 type route hook output priority -280; policy accept;
                 meta l4proto udp th dport { 53, 5331, 5332, 5341, 9896, 67, 68, 1900, 5350, 5351, 5353 } accept
-                meta l4proto tcp th dport { 53, 5331, 5332, 5341, 9896, 2195, 2196, 2197, 3689, 5223, 5297 } accept
+                meta l4proto tcp th dport { 53, 5331, 5332, 5341, 9896, 10808, 2195, 2196, 2197, 3689, 5223, 5297 } accept
                 meta mark 0xff accept
                 ip daddr @GlobalDNS accept
                 ip daddr \$RESERVED_IP accept
@@ -2295,7 +2348,7 @@ import toml
 with open("/opt/de_GWD/pihole/pihole.toml", "r") as f:
  data = toml.load(f)
 
-data["dns"]["port"] = 5399
+data["dns"]["port"] = 53
 data["dns"]["upstreams"] = ["127.0.0.1#5341","127.0.0.1#5341"]
 data["dns"]["listeningMode"] = "ALL"
 data["dns"]["EDNS0ECS"] = True
