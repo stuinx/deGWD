@@ -21,6 +21,7 @@ GWD_GITHUB_PROXY=${GWD_GITHUB_PROXY:-}
 GWD_DOCKER_SOURCE=${GWD_DOCKER_SOURCE:-https://mirrors.ustc.edu.cn/docker-ce}
 GWD_DOCKER_GPG_SOURCE=${GWD_DOCKER_GPG_SOURCE:-https://download.docker.com}
 GWD_DEBIAN_MIRROR=${GWD_DEBIAN_MIRROR:-https://mirrors.ustc.edu.cn}
+GWD_PHP_VERSION=${GWD_PHP_VERSION:-auto}
 branch="$GWD_REF"
 
 gwdDownload(){
@@ -154,15 +155,39 @@ unset aptPKG
 [[ -z $(dpkg -l | awk '{print$2}' | grep '^socat$') ]] && aptPKG+=(socat)
 [[ -z $(dpkg -l | awk '{print$2}' | grep '^zip$') ]] && aptPKG+=(zip)
 [[ -z $(dpkg -l | awk '{print$2}' | grep '^docker-ce$') ]] && aptPKG+=(docker-ce)
-[[ -z $(dpkg -l | awk '{print$2}' | grep '^php7.4-fpm$') ]] && aptPKG+=(php7.4-fpm)
-[[ -z $(dpkg -l | awk '{print$2}' | grep '^php7.4-cgi$') ]] && aptPKG+=(php7.4-cgi)
-[[ -z $(dpkg -l | awk '{print$2}' | grep '^php7.4-sqlite3$') ]] && aptPKG+=(php7.4-sqlite3)
-[[ -z $(dpkg -l | awk '{print$2}' | grep '^php7.4-xml$') ]] && aptPKG+=(php7.4-xml)
-[[ -z $(dpkg -l | awk '{print$2}' | grep '^php7.4-intl$') ]] && aptPKG+=(php7.4-intl)
-[[ -z $(dpkg -l | awk '{print$2}' | grep '^php7.4-json$') ]] && aptPKG+=(php7.4-json)
 [[ -z $(dpkg -l | awk '{print$2}' | grep '^sqlite3$') ]] && aptPKG+=(sqlite3)
 [[ -z $(dpkg -l | awk '{print$2}' | grep '^libmimalloc2.0') ]] && aptPKG+=(libmimalloc2.0)
-[[ -n $aptPKG ]] && apt update && apt install $(echo ${aptPKG[@]})
+
+if [[ $GWD_PHP_VERSION = auto ]]; then
+  if [[ $(apt-cache policy php7.4-fpm 2>/dev/null | awk '/Candidate:/ {print $2; exit}') != "" &&
+        $(apt-cache policy php7.4-fpm 2>/dev/null | awk '/Candidate:/ {print $2; exit}') != "(none)" ]]; then
+    GWD_PHP_VERSION="7.4"
+  else
+    GWD_PHP_VERSION="8.2"
+  fi
+fi
+case $GWD_PHP_VERSION in
+  7.4)
+    [[ -z $(dpkg -l | awk '{print$2}' | grep '^php7.4-fpm$') ]] && aptPKG+=(php7.4-fpm)
+    [[ -z $(dpkg -l | awk '{print$2}' | grep '^php7.4-cgi$') ]] && aptPKG+=(php7.4-cgi)
+    [[ -z $(dpkg -l | awk '{print$2}' | grep '^php7.4-sqlite3$') ]] && aptPKG+=(php7.4-sqlite3)
+    [[ -z $(dpkg -l | awk '{print$2}' | grep '^php7.4-xml$') ]] && aptPKG+=(php7.4-xml)
+    [[ -z $(dpkg -l | awk '{print$2}' | grep '^php7.4-intl$') ]] && aptPKG+=(php7.4-intl)
+    [[ -z $(dpkg -l | awk '{print$2}' | grep '^php7.4-json$') ]] && aptPKG+=(php7.4-json)
+    ;;
+  8.2)
+    [[ -z $(dpkg -l | awk '{print$2}' | grep '^php8.2-fpm$') ]] && aptPKG+=(php8.2-fpm)
+    [[ -z $(dpkg -l | awk '{print$2}' | grep '^php8.2-cgi$') ]] && aptPKG+=(php8.2-cgi)
+    [[ -z $(dpkg -l | awk '{print$2}' | grep '^php8.2-sqlite3$') ]] && aptPKG+=(php8.2-sqlite3)
+    [[ -z $(dpkg -l | awk '{print$2}' | grep '^php8.2-xml$') ]] && aptPKG+=(php8.2-xml)
+    [[ -z $(dpkg -l | awk '{print$2}' | grep '^php8.2-intl$') ]] && aptPKG+=(php8.2-intl)
+    ;;
+  *)
+    echo "不支持的 PHP 版本：$GWD_PHP_VERSION" >&2
+    return 1
+    ;;
+esac
+[[ -n $aptPKG ]] && apt update && apt install -y "${aptPKG[@]}"
 }
 
 checkSum(){
@@ -1795,12 +1820,23 @@ updateAPT(){
 echo -e "${WHITE}[...]\c" && echo -e "\t${WHITE}Debian Updated${cRES}\r\c"
 gwdConfigureAptMirror || exit 1
 
-echo "deb [signed-by=/etc/apt/keyrings/deb.sury.org.gpg] https://packages.sury.org/php/ $(cat /etc/os-release | grep VERSION= | cut -d'(' -f2 | cut -d')' -f1) main" >/etc/apt/sources.list.d/php.list
 apt-key del 95BD4743 >/dev/null 2>&1
-curl -sSLo /etc/apt/keyrings/deb.sury.org.gpg https://packages.sury.org/php/apt.gpg
-[[ $? -ne 0 ]] && echo -e "${WHITE}PHP apt key${RED} Download Failed${cRES}"
+rm -f /etc/apt/sources.list.d/php.list /etc/apt/keyrings/deb.sury.org.gpg
+mkdir -p /etc/apt/keyrings
+phpKey=$(mktemp)
+if curl -fsSL --retry 2 --connect-timeout 8 --max-time 30 https://packages.sury.org/php/apt.gpg -o "$phpKey" &&
+   gpg --batch --dearmor --output /etc/apt/keyrings/deb.sury.org.gpg "$phpKey"; then
+  echo "deb [signed-by=/etc/apt/keyrings/deb.sury.org.gpg] https://packages.sury.org/php/ $(cat /etc/os-release | grep VERSION= | cut -d'(' -f2 | cut -d')' -f1) main" >/etc/apt/sources.list.d/php.list
+else
+  echo -e "${WHITE}PHP apt key${RED} Download Failed; using Debian PHP${cRES}"
+fi
+rm -f "$phpKey"
 
-apt update --fix-missing && apt upgrade --allow-downgrades -y
+if ! apt update --fix-missing; then
+  rm -f /etc/apt/sources.list.d/php.list
+  apt update --fix-missing || return 1
+fi
+apt upgrade --allow-downgrades -y
 apt full-upgrade -y && apt autoremove --purge -y && apt clean -y && apt autoclean -y
 
 echo -e "${WHITE}[ ${GREEN}✓ ${WHITE}]\c" && echo -e "\t${WHITE}Debian ${GREEN}Updated${cRES}"
@@ -1816,6 +1852,11 @@ sed -i "/Allow members of group sudo to execute any command/a\www-data ALL=(root
 pkgDEP1
 
 pkgDEP2
+
+if [[ $GWD_PHP_VERSION != "7.4" ]]; then
+  [[ -e /etc/php/7.4 ]] || ln -s "/etc/php/$GWD_PHP_VERSION" /etc/php/7.4
+  [[ -e /usr/sbin/php-fpm7.4 ]] || ln -s "/usr/sbin/php-fpm$GWD_PHP_VERSION" /usr/sbin/php-fpm7.4
+fi
 
 DPKGclean=$(dpkg --list | grep "^rc" | cut -d " " -f 3)
 [[ -n $DPKGclean ]] && echo $DPKGclean | xargs sudo dpkg --purge
@@ -2224,7 +2265,7 @@ cp -f /opt/de_GWD/.repo/version.php /var/www/html/act/version.php
 
 local settings
 settings=$(mktemp /opt/de_GWD/.repo/download.env.XXXXXX) || exit 1
-for name in GWD_REPO GWD_REF GWD_GITHUB_PROXY GWD_DOCKER_SOURCE GWD_DOCKER_GPG_SOURCE GWD_DEBIAN_MIRROR; do
+for name in GWD_REPO GWD_REF GWD_GITHUB_PROXY GWD_DOCKER_SOURCE GWD_DOCKER_GPG_SOURCE GWD_DEBIAN_MIRROR GWD_PHP_VERSION; do
     printf 'export %s=%q\n' "$name" "${!name}"
 done >"$settings"
 chmod 600 "$settings"

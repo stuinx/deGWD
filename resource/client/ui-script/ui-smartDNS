@@ -8,6 +8,8 @@ CYAN='\E[1;36m'
 WHITE='\E[1;37m'
 cRES='\E[0m'
 
+[[ -f /opt/de_GWD/.repo/download.env ]] && source /opt/de_GWD/.repo/download.env
+
 
 
 echo -e "${WHITE}[...]\c" && echo -e "\t${WHITE}SmartDNS action${cRES}\r\c"
@@ -146,8 +148,15 @@ if [[ $doh1re_origin != $doh1IP ]] || [[ $doh2re_origin != $doh2IP ]]; then
 systemctl restart smartdns
 fi
 
-if [[ -n $DoGcIP ]] || [[ -n $doh1IP ]] || [[ -n $doh2IP ]]; then
-echo $DoGcIP $doh1IP $doh2IP | xargs -n1 | sort | uniq | sed 's/$/,/g' >/opt/de_GWD/nftables/IP_GlobalDNS
+proxyIP=""
+if [[ -n ${GWD_GITHUB_PROXY:-} ]]; then
+    proxyHost=${GWD_GITHUB_PROXY#*://}
+    proxyHost=${proxyHost%%/*}
+    proxyHost=${proxyHost%%:*}
+    proxyIP=$(getent ahostsv4 "$proxyHost" 2>/dev/null | awk '{print $1}' | sort -u)
+fi
+if [[ -n $DoGcIP ]] || [[ -n $doh1IP ]] || [[ -n $doh2IP ]] || [[ -n $proxyIP ]]; then
+echo $DoGcIP $doh1IP $doh2IP $proxyIP | xargs -n1 | sort | uniq | sed 's/$/,/g' >/opt/de_GWD/nftables/IP_GlobalDNS
 nft flush set ip de_GWD GlobalDNS
 cat << EOF >/opt/de_GWD/nftables/SET_GlobalDNS.nft
 #!/usr/sbin/nft -f

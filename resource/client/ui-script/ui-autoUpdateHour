@@ -18,7 +18,13 @@ GWD_REPO=${GWD_REPO:-stuinx/deGWD}
 GWD_REF=${GWD_REF:-codex/install-test-20260913}
 localVer=$(awk 'NR==1' /var/www/html/act/version.php)
 versionURL="https://raw.githubusercontent.com/$GWD_REPO/$GWD_REF/version.php"
-remoteVer=$(curl -fsSL --connect-timeout 10 --max-time 30 "$versionURL") || exit 1
+remoteVer=""
+if [[ -n ${GWD_GITHUB_PROXY:-} ]]; then
+    remoteVer=$(curl -fsSL --retry 2 --connect-timeout 10 --max-time 30 "${GWD_GITHUB_PROXY%/}/$versionURL" || true)
+fi
+if [[ -z $remoteVer ]]; then
+    remoteVer=$(curl -fsSL --retry 2 --connect-timeout 10 --max-time 30 "$versionURL") || exit 1
+fi
 remoteVer=${remoteVer%%$'\n'*}
 [[ $remoteVer =~ ^v[0-9][0-9A-Za-z._-]*$ ]] || exit 1
 [[ $remoteVer != "$localVer" ]] || exit 0

@@ -46,7 +46,7 @@ unset aptPKG
 [[ -z $(dpkg -l | awk '{print$2}' | grep '^docker-ce$') ]] && aptPKG+=(docker-ce)
 [[ -z $(dpkg -l | awk '{print$2}' | grep '^docker-ce-cli$') ]] && aptPKG+=(docker-ce-cli)
 [[ -z $(dpkg -l | awk '{print$2}' | grep '^containerd.io$') ]] && aptPKG+=(containerd.io)
-[[ -n $aptPKG ]] && apt update && apt install $(echo ${aptPKG[@]})
+[[ -n $aptPKG ]] && apt update && apt install -y "${aptPKG[@]}"
 
 if [[ -n $(dpkg -l | awk '{print$2}' | grep '^docker-ce$') ]] && [[ -n $(dpkg -l | awk '{print$2}' | grep '^containerd.io$') ]]; then
 mkdir -p /etc/docker/
@@ -59,7 +59,11 @@ EOF
 systemctl restart docker
 fi
 
-dockerComposeVer=$(curl -fsSL --connect-timeout 10 --max-time 30 "https://api.github.com/repos/docker/compose/releases/latest" | jq -r .tag_name | grep -v '^null$' || true)
+dockerComposeURL="https://api.github.com/repos/docker/compose/releases/latest"
+if [[ -n $GWD_GITHUB_PROXY ]]; then
+    dockerComposeVer=$(curl -fsSL --retry 2 --connect-timeout 10 --max-time 30 "${GWD_GITHUB_PROXY%/}/$dockerComposeURL" | jq -r .tag_name | grep -v '^null$' || true)
+fi
+[[ -z $dockerComposeVer ]] && dockerComposeVer=$(curl -fsSL --retry 2 --connect-timeout 10 --max-time 30 "$dockerComposeURL" | jq -r .tag_name | grep -v '^null$' || true)
 [[ -z $dockerComposeVer ]] && dockerComposeVer=$dockerComposeVer_reserved
 
 gwdDockerDownload "https://github.com/docker/compose/releases/download/$dockerComposeVer/docker-compose-$(uname -s)-$(uname -m)" /usr/local/bin/docker-compose || return 1

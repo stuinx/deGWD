@@ -12,9 +12,38 @@ cRES='\E[0m'
 
 /opt/de_GWD/tcpTime
 
+if [[ -f /opt/de_GWD/.repo/download.env ]]; then
+  # shellcheck disable=SC1091
+  source /opt/de_GWD/.repo/download.env
+fi
+
+gwdFetch(){
+local url=$1 output=$2 candidate
+local urls=("$url")
+if [[ -n ${GWD_GITHUB_PROXY:-} && $url == https://raw.githubusercontent.com/* ]]; then
+  [[ $GWD_GITHUB_PROXY == https://* ]] || return 1
+  urls=("${GWD_GITHUB_PROXY%/}/$url" "$url")
+fi
+for candidate in "${urls[@]}"; do
+  if curl -fSL --retry 2 --connect-timeout 10 --max-time 300 "$candidate" -o "$output" && [[ -s $output ]]; then
+    return 0
+  fi
+done
+return 1
+}
+
+gwdFetchText(){
+local tmp
+tmp=$(mktemp) || return 1
+gwdFetch "$1" "$tmp" && cat "$tmp"
+local result=$?
+rm -f "$tmp"
+return $result
+}
+
 serverConnect1=$(curl -Is -m 5 google.com | grep 'HTTP')
 serverConnect2=$(curl -Is -m 5 youtube.com | grep 'HTTP')
-[[ -z $serverConnect1 ]] && [[ -z $serverConnect2 ]] && exit
+[[ -z $serverConnect1 ]] && [[ -z $serverConnect2 ]] && [[ -z ${GWD_GITHUB_PROXY:-} ]] && exit
 
 [[ $1 = "u" ]] && service cron stop
 
@@ -28,17 +57,17 @@ elif [[ $sha256sumL != $2 ]]; then
 fi
 }
 
-geosite_sha256sum=$(curl -fsSLo- https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/geosite.dat.sha256sum | awk '{print$1}')
-geoip_sha256sum=$(curl -fsSLo- https://raw.githubusercontent.com/Loyalsoldier/geoip/release/geoip.dat.sha256sum | awk '{print$1}')
-IPchnroute_sha256sum=$(curl -fsSLo- https://raw.githubusercontent.com/jacyl4/chnroute/main/IPchnroute.sha256sum)
-DomainsChn_sha256sum=$(curl -fsSLo- https://raw.githubusercontent.com/jacyl4/chnroute/main/mosdns_chnlist/Domains.chn.txt.sha256sum)
-DomainsApple_sha256sum=$(curl -fsSLo- https://raw.githubusercontent.com/jacyl4/chnroute/main/mosdns_chnlist/Domains.apple.txt.sha256sum)
-DomainsGames_sha256sum=$(curl -fsSLo- https://raw.githubusercontent.com/jacyl4/chnroute/main/mosdns_chnlist/Domains.games.txt.sha256sum)
-bogusNxdomain_sha256sum=$(curl -fsSLo- https://raw.githubusercontent.com/jacyl4/chnroute/main/mosdns_chnlist/99-bogus-nxdomain.china.conf.sha256sum)
+geosite_sha256sum=$(gwdFetchText https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/geosite.dat.sha256sum | awk '{print$1}')
+geoip_sha256sum=$(gwdFetchText https://raw.githubusercontent.com/Loyalsoldier/geoip/release/geoip.dat.sha256sum | awk '{print$1}')
+IPchnroute_sha256sum=$(gwdFetchText https://raw.githubusercontent.com/jacyl4/chnroute/main/IPchnroute.sha256sum)
+DomainsChn_sha256sum=$(gwdFetchText https://raw.githubusercontent.com/jacyl4/chnroute/main/mosdns_chnlist/Domains.chn.txt.sha256sum)
+DomainsApple_sha256sum=$(gwdFetchText https://raw.githubusercontent.com/jacyl4/chnroute/main/mosdns_chnlist/Domains.apple.txt.sha256sum)
+DomainsGames_sha256sum=$(gwdFetchText https://raw.githubusercontent.com/jacyl4/chnroute/main/mosdns_chnlist/Domains.games.txt.sha256sum)
+bogusNxdomain_sha256sum=$(gwdFetchText https://raw.githubusercontent.com/jacyl4/chnroute/main/mosdns_chnlist/99-bogus-nxdomain.china.conf.sha256sum)
 
 if [[ $(checkSum /opt/de_GWD/.repo/geosite.dat $geosite_sha256sum) = "false" ]]; then
 rm -rf /tmp/geosite.dat
-wget --show-progress -cqO /tmp/geosite.dat https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/geosite.dat
+gwdFetch https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/geosite.dat /tmp/geosite.dat
   if [[ $(checkSum /tmp/geosite.dat $geosite_sha256sum) = "true" ]]; then
     mv -f /tmp/geosite.dat /opt/de_GWD/.repo/geosite.dat
   else
@@ -48,7 +77,7 @@ fi
 
 if [[ $(checkSum /opt/de_GWD/.repo/geoip.dat $geoip_sha256sum) = "false" ]]; then
 rm -rf /tmp/geoip.dat
-wget --show-progress -cqO /tmp/geoip.dat https://raw.githubusercontent.com/Loyalsoldier/geoip/release/geoip.dat
+gwdFetch https://raw.githubusercontent.com/Loyalsoldier/geoip/release/geoip.dat /tmp/geoip.dat
   if [[ $(checkSum /tmp/geoip.dat $geoip_sha256sum) = "true" ]]; then
     mv -f /tmp/geoip.dat /opt/de_GWD/.repo/geoip.dat
   else
@@ -58,7 +87,7 @@ fi
 
 if [[ $(checkSum /opt/de_GWD/.repo/IPchnroute $IPchnroute_sha256sum) = "false" ]]; then
 rm -rf /tmp/IPchnroute
-wget --show-progress -cqO /tmp/IPchnroute https://raw.githubusercontent.com/jacyl4/chnroute/main/IPchnroute
+gwdFetch https://raw.githubusercontent.com/jacyl4/chnroute/main/IPchnroute /tmp/IPchnroute
   if [[ $(checkSum /tmp/IPchnroute $IPchnroute_sha256sum) = "true" ]]; then
     mv -f /tmp/IPchnroute /opt/de_GWD/.repo/IPchnroute
   else
@@ -68,7 +97,7 @@ fi
 
 if [[ $(checkSum /opt/de_GWD/.repo/Domains.chn.txt $DomainsChn_sha256sum) = "false" ]]; then
 rm -rf /tmp/Domains.chn.txt
-wget --show-progress -cqO /tmp/Domains.chn.txt https://raw.githubusercontent.com/jacyl4/chnroute/main/mosdns_chnlist/Domains.chn.txt
+gwdFetch https://raw.githubusercontent.com/jacyl4/chnroute/main/mosdns_chnlist/Domains.chn.txt /tmp/Domains.chn.txt
   if [[ $(checkSum /tmp/Domains.chn.txt $DomainsChn_sha256sum) = "true" ]]; then
     mv -f /tmp/Domains.chn.txt /opt/de_GWD/.repo/Domains.chn.txt
   else
@@ -78,7 +107,7 @@ fi
 
 if [[ $(checkSum /opt/de_GWD/.repo/Domains.apple.txt $DomainsApple_sha256sum) = "false" ]]; then
 rm -rf /tmp/Domains.apple.txt
-wget --show-progress -cqO /tmp/Domains.apple.txt https://raw.githubusercontent.com/jacyl4/chnroute/main/mosdns_chnlist/Domains.apple.txt
+gwdFetch https://raw.githubusercontent.com/jacyl4/chnroute/main/mosdns_chnlist/Domains.apple.txt /tmp/Domains.apple.txt
   if [[ $(checkSum /tmp/Domains.apple.txt $DomainsApple_sha256sum) = "true" ]]; then
     mv -f /tmp/Domains.apple.txt /opt/de_GWD/.repo/Domains.apple.txt
   else
@@ -88,7 +117,7 @@ fi
 
 if [[ $(checkSum /opt/de_GWD/.repo/Domains.games.txt $DomainsGames_sha256sum) = "false" ]]; then
 rm -rf /tmp/Domains.games.txt
-wget --show-progress -cqO /tmp/Domains.games.txt https://raw.githubusercontent.com/jacyl4/chnroute/main/mosdns_chnlist/Domains.games.txt
+gwdFetch https://raw.githubusercontent.com/jacyl4/chnroute/main/mosdns_chnlist/Domains.games.txt /tmp/Domains.games.txt
   if [[ $(checkSum /tmp/Domains.games.txt $DomainsGames_sha256sum) = "true" ]]; then
     mv -f /tmp/Domains.games.txt /opt/de_GWD/.repo/Domains.games.txt
   else
@@ -98,7 +127,7 @@ fi
 
 if [[ $(checkSum /opt/de_GWD/.repo/99-bogus-nxdomain.china.conf $bogusNxdomain_sha256sum) = "false" ]]; then
 rm -rf /tmp/99-bogus-nxdomain.china.conf
-wget --show-progress -cqO /tmp/99-bogus-nxdomain.china.conf https://raw.githubusercontent.com/jacyl4/chnroute/main/mosdns_chnlist/99-bogus-nxdomain.china.conf
+gwdFetch https://raw.githubusercontent.com/jacyl4/chnroute/main/mosdns_chnlist/99-bogus-nxdomain.china.conf /tmp/99-bogus-nxdomain.china.conf
   if [[ $(checkSum /tmp/99-bogus-nxdomain.china.conf $bogusNxdomain_sha256sum) = "true" ]]; then
     mv -f /tmp/99-bogus-nxdomain.china.conf /opt/de_GWD/.repo/99-bogus-nxdomain.china.conf
   else
