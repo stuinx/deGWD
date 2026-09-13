@@ -1428,7 +1428,14 @@ EOF
 rm -rf /etc/nftables*
 rm -rf /opt/de_GWD/nftables
 mkdir -p /opt/de_GWD/nftables
-echo $DoGcIP $doh1IP $doh2IP | xargs -n1 | sort | uniq | sed 's/$/,/g' >/opt/de_GWD/nftables/IP_GlobalDNS
+proxyIP=""
+if [[ -n $GWD_GITHUB_PROXY ]]; then
+    proxyHost=${GWD_GITHUB_PROXY#*://}
+    proxyHost=${proxyHost%%/*}
+    proxyHost=${proxyHost%%:*}
+    proxyIP=$(getent ahostsv4 "$proxyHost" 2>/dev/null | awk '{print $1}' | sort -u)
+fi
+echo $DoGcIP $doh1IP $doh2IP $proxyIP | xargs -n1 | sort | uniq | sed 's/$/,/g' >/opt/de_GWD/nftables/IP_GlobalDNS
 cat << EOF >/opt/de_GWD/nftables/SET_GlobalDNS.nft
 #!/usr/sbin/nft -f
 table ip de_GWD {
