@@ -1488,10 +1488,14 @@ systemctl force-reload nginx
 fi
 
 acmeSetup || return 1
+local acmeRet=0
 if [[ -n $topDomain && "$domain" == "$topDomain" ]]; then
-  "/root/.acme.sh"/acme.sh --issue --dns dns_cf -d "$domain" -d "*.$topDomain" -k ec-256 --dnssleep 60 || return 1
+  "/root/.acme.sh"/acme.sh --issue --dns dns_cf -d "$domain" -d "*.$topDomain" -k ec-256 --dnssleep 60 || acmeRet=$?
 else
-  "/root/.acme.sh"/acme.sh --issue --dns dns_cf -d "$domain" -k ec-256 --dnssleep 60 || return 1
+  "/root/.acme.sh"/acme.sh --issue --dns dns_cf -d "$domain" -k ec-256 --dnssleep 60 || acmeRet=$?
+fi
+if [[ $acmeRet -ne 0 && $acmeRet -ne 2 ]]; then
+  return 1
 fi
 "/root/.acme.sh"/acme.sh --installcert -d "$domain" \
                --key-file       /var/www/ssl/de_GWD.key  \
@@ -1530,7 +1534,11 @@ systemctl force-reload nginx
 fi
 
 acmeSetup || return 1
-"/root/.acme.sh"/acme.sh --issue -d "$domain" -w /var/www/html -k ec-256 || return 1
+local acmeRet=0
+"/root/.acme.sh"/acme.sh --issue -d "$domain" -w /var/www/html -k ec-256 || acmeRet=$?
+if [[ $acmeRet -ne 0 && $acmeRet -ne 2 ]]; then
+  return 1
+fi
 "/root/.acme.sh"/acme.sh --installcert -d "$domain" \
                --key-file       /var/www/ssl/de_GWD.key  \
                --fullchain-file /var/www/ssl/de_GWD.cer \
