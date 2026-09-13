@@ -152,10 +152,12 @@ fi
 if [[ -f "./de_GWD_$architecture.zip" ]]; then
     mv -f ./de_GWD_$architecture.zip /opt/de_GWD/.repo/de_GWD.zip
 else
-    sha256sum_de_GWD=$(curl -fsSLo- https://ghproxy.net/https://raw.githubusercontent.com/jacyl4/de_GWD/main/de_GWD_"$architecture".zip.sha256sum)
+    sha256sum_de_GWD=$(curl -fsSLo- https://raw.githubusercontent.com/stuinx/deGWD/$branch/de_GWD_"$architecture".zip.sha256sum)
+    [[ -z $sha256sum_de_GWD ]] && sha256sum_de_GWD=$(curl -fsSLo- https://ghproxy.net/https://raw.githubusercontent.com/jacyl4/de_GWD/main/de_GWD_"$architecture".zip.sha256sum)
     if [[ -n $sha256sum_de_GWD ]] && [[ $(checkSum /opt/de_GWD/.repo/de_GWD.zip $sha256sum_de_GWD) = "false" ]]; then
     rm -rf /tmp/de_GWD.zip
-    wget --no-check-certificate --show-progress -cqO /tmp/de_GWD.zip https://ghproxy.net/https://raw.githubusercontent.com/jacyl4/de_GWD/main/de_GWD_"$architecture".zip
+    wget --no-check-certificate --show-progress -cqO /tmp/de_GWD.zip https://raw.githubusercontent.com/stuinx/deGWD/$branch/de_GWD_"$architecture".zip
+    [[ $(checkSum /tmp/de_GWD.zip $sha256sum_de_GWD) = "false" ]] && rm -rf /tmp/de_GWD.zip && wget --no-check-certificate --show-progress -cqO /tmp/de_GWD.zip https://ghproxy.net/https://raw.githubusercontent.com/jacyl4/de_GWD/main/de_GWD_"$architecture".zip
     [[ $(checkSum /tmp/de_GWD.zip $sha256sum_de_GWD) = "false" ]] && rm -rf /tmp/de_GWD.zip && wget --no-check-certificate --show-progress -cqO /tmp/de_GWD.zip https://de-gwd.accxio.workers.dev/de_GWD_"$architecture".zip
     [[ $(checkSum /tmp/de_GWD.zip $sha256sum_de_GWD) = "false" ]] && echo -e "${WHITE}de_GWD Zip${RED} Download Failed${cRES}" && exit
     [[ $(checkSum /tmp/de_GWD.zip $sha256sum_de_GWD) = "true" ]] && mv -f /tmp/de_GWD.zip /opt/de_GWD/.repo/de_GWD.zip
@@ -1778,6 +1780,7 @@ EOF
 
 echo "deb [signed-by=/etc/apt/keyrings/deb.sury.org.gpg] https://packages.sury.org/php/ $(cat /etc/os-release | grep VERSION= | cut -d'(' -f2 | cut -d')' -f1) main" >/etc/apt/sources.list.d/php.list
 apt-key del 95BD4743 >/dev/null 2>&1
+mkdir -p /etc/apt/keyrings
 curl -sSLo /etc/apt/keyrings/deb.sury.org.gpg https://packages.sury.org/php/apt.gpg
 [[ $? -ne 0 ]] && echo -e "${WHITE}PHP apt key${RED} Download Failed${cRES}"
 
@@ -2913,4 +2916,6 @@ read -p "Select:" num
     esac
 }
 
-start_menu
+if [[ $DE_GWD_TEST_MODE != 1 ]]; then
+  start_menu
+fi
