@@ -84,9 +84,16 @@ else
 fi
 fi
 
+if command -v docker >/dev/null 2>&1 && docker ps --filter 'name=^/pihole$' --format '{{.ID}}' 2>/dev/null | grep -q .; then
+    smartdnsSystemBind=""
+else
+    smartdnsSystemBind=$'bind :53 -group DNS_global\nbind-tcp :53 -group DNS_global'
+fi
+
 cat << EOF >/opt/de_GWD/smartdns/smartdns.conf
 server-name smartdns
 
+$smartdnsSystemBind
 bind 127.0.0.1:5331
 bind-tcp 127.0.0.1:5331
 

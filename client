@@ -2222,6 +2222,7 @@ unzip /opt/de_GWD/.repo/client.zip -d /tmp >/dev/null 2>&1
 
 rm -rf /opt/de_GWD/ui-*
 rm -rf /opt/de_GWD/ui_*
+rm -rf /opt/de_GWD/__pycache__ /tmp/ui-script/__pycache__
 rm -rf /var/www/html/*.php
 rm -rf /var/www/html/*.ico
 rm -rf /var/www/html/act
