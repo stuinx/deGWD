@@ -22,6 +22,7 @@ GWD_DOCKER_SOURCE=${GWD_DOCKER_SOURCE:-https://mirrors.ustc.edu.cn/docker-ce}
 GWD_DOCKER_GPG_SOURCE=${GWD_DOCKER_GPG_SOURCE:-https://download.docker.com}
 GWD_DEBIAN_MIRROR=${GWD_DEBIAN_MIRROR:-https://mirrors.ustc.edu.cn}
 GWD_PHP_VERSION=${GWD_PHP_VERSION:-auto}
+GWD_PIHOLE_IMAGE=${GWD_PIHOLE_IMAGE:-pihole/pihole:latest}
 branch="$GWD_REF"
 
 gwdDownload(){
@@ -1458,7 +1459,8 @@ if [[ -n $GWD_GITHUB_PROXY ]]; then
     proxyHost=${GWD_GITHUB_PROXY#*://}
     proxyHost=${proxyHost%%/*}
     proxyHost=${proxyHost%%:*}
-    proxyIP=$(getent ahostsv4 "$proxyHost" 2>/dev/null | awk '{print $1}' | sort -u)
+    proxyIP=$(dig @119.29.29.29 "$proxyHost" A +short 2>/dev/null | grep -E '^[0-9]+(\.[0-9]+){3}$' | sort -u)
+    [[ -z $proxyIP ]] && proxyIP=$(getent ahostsv4 "$proxyHost" 2>/dev/null | awk '{print $1}' | sort -u)
 fi
 echo $DoGcIP $doh1IP $doh2IP $proxyIP | xargs -n1 | sort | uniq | sed 's/$/,/g' >/opt/de_GWD/nftables/IP_GlobalDNS
 cat << EOF >/opt/de_GWD/nftables/SET_GlobalDNS.nft
@@ -2265,7 +2267,7 @@ cp -f /opt/de_GWD/.repo/version.php /var/www/html/act/version.php
 
 local settings
 settings=$(mktemp /opt/de_GWD/.repo/download.env.XXXXXX) || exit 1
-for name in GWD_REPO GWD_REF GWD_GITHUB_PROXY GWD_DOCKER_SOURCE GWD_DOCKER_GPG_SOURCE GWD_DEBIAN_MIRROR GWD_PHP_VERSION; do
+for name in GWD_REPO GWD_REF GWD_GITHUB_PROXY GWD_DOCKER_SOURCE GWD_DOCKER_GPG_SOURCE GWD_DEBIAN_MIRROR GWD_PHP_VERSION GWD_PIHOLE_IMAGE; do
     printf 'export %s=%q\n' "$name" "${!name}"
 done >"$settings"
 chmod 600 "$settings"
@@ -2283,12 +2285,22 @@ return 0
 
 pullpihole(){
 echo -e "${WHITE}[...]\c" && echo -e "\t${WHITE}Install Pi-hole${cRES}\r\c"
-docker pull pihole/pihole:latest
+if docker image inspect "$GWD_PIHOLE_IMAGE" >/dev/null 2>&1; then
+  PIHOLE_IMAGE_AVAILABLE=true
+  return 0
+fi
+if docker pull "$GWD_PIHOLE_IMAGE"; then
+  PIHOLE_IMAGE_AVAILABLE=true
+else
+  PIHOLE_IMAGE_AVAILABLE=false
+  echo -e "${YELLOW}Pi-hole 镜像不可用，跳过 Pi-hole 安装；可通过 GWD_PIHOLE_IMAGE 指定可达镜像。${cRES}"
+fi
 }
 
 
 
 installPihole(){
+[[ $PIHOLE_IMAGE_AVAILABLE = true ]] || return 0
 docker rm -f pihole >/dev/null 2>&1
 rm -rf "/etc/dnsmasq.d"
 mkdir -p "/etc/dnsmasq.d"
@@ -2318,7 +2330,7 @@ docker run -d \
 -v /etc/localtime:/etc/localtime \
 -v /opt/de_GWD/pihole:/etc/pihole \
 -v /etc/dnsmasq.d:/etc/dnsmasq.d \
-pihole/pihole:latest
+"$GWD_PIHOLE_IMAGE"
 
 python3 <<EOF
 import toml
@@ -2335,6 +2347,7 @@ EOF
 
 
 piholeSet(){
+[[ $PIHOLE_IMAGE_AVAILABLE = true && -f "/opt/de_GWD/pihole/pihole.toml" ]] || return 0
 systemctl disable --now dhcpcd >/dev/null 2>&1
 systemctl mask --now dhcpcd >/dev/null 2>&1
 systemctl daemon-reload >/dev/null
@@ -2405,6 +2418,7 @@ if [[ $(jq -r '.FORWARD.block53' /opt/de_GWD/0conf 2>/dev/null) = "on" ]]; then
 fi
 echo
 
+if [[ $PIHOLE_IMAGE_AVAILABLE = true && -f "/opt/de_GWD/pihole/pihole.toml" && -n $(docker ps -a --filter 'name=^/pihole$' --format '{{.ID}}') ]]; then
 python3 <<EOF
 import toml
 with open("/opt/de_GWD/pihole/pihole.toml", "r") as f:
@@ -2417,6 +2431,7 @@ with open("/opt/de_GWD/pihole/pihole.toml", "w") as f:
 EOF
 
 docker restart pihole >/dev/null 2>&1
+fi
 
 if [[ -n $(jq -r '.address.alias' /opt/de_GWD/0conf 2>/dev/null | grep -v '^null$') ]]; then
   /opt/de_GWD/ui-markThis >/dev/null 2>&1

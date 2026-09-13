@@ -112,7 +112,6 @@
     "default": "direct",
     "domains": [
       "geosite:apple",
-      "geosite:apple-ads",
       "geosite:apple-dev",
       "geosite:apple-update",
       "geosite:icloud",
