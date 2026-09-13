@@ -26,7 +26,7 @@ fi
 sed -i '/dns-nameservers /d' /etc/network/interfaces
 resolvconf -u
 
-systemctl restart samrtdns
+systemctl restart smartdns
 systemctl restart mosdns
 systemctl restart vtrui
 systemctl restart nftables
