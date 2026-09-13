@@ -9,6 +9,7 @@ WHITE='\E[1;37m'
 cRES='\E[0m'
 architecture=$(dpkg --print-architecture)
 export DEBIAN_FRONTEND=noninteractive
+[[ -f "/etc/apt/sources.list.d/debian.sources" ]] && mv -f "/etc/apt/sources.list.d/debian.sources" "/etc/apt/debian.sources.disabled"
 cat << EOF >/etc/apt/apt.conf.d/01InstallLess
 APT::Get::Assume-Yes "true";
 APT::Install-Recommends "false";
@@ -21,7 +22,18 @@ Dpkg::Options {
 };
 EOF
 
-
+waitAPT(){
+local timeout=180
+while pgrep -x apt >/dev/null 2>&1 || pgrep -x apt-get >/dev/null 2>&1 || pgrep -x dpkg >/dev/null 2>&1 || pgrep -x unattended-upgrade >/dev/null 2>&1; do
+  if (( timeout <= 0 )); then
+    echo -e "${WHITE}APT lock${RED} is still held${cRES}"
+    return 1
+  fi
+  sleep 1
+  ((timeout--))
+done
+return 0
+}
 
 apt-key del 2FB2CD80 >/dev/null 2>&1
 apt-key del 33F8024D >/dev/null 2>&1
@@ -41,12 +53,14 @@ unset aptPKG
 [[ -z $(dpkg -l | awk '{print$2}' | grep '^python3$') ]] && aptPKG+=(python3)
 [[ -z $(which 'update-grub') ]] && [[ -d "/sys/firmware/efi" ]] && aptPKG+=(grub-efi)
 [[ -z $(which 'update-grub') ]] && [[ ! -d "/sys/firmware/efi" ]] && aptPKG+=(grub2-common)
-[[ -n $aptPKG ]] && apt update && apt install -y $(echo ${aptPKG[@]})
+[[ -z $(dpkg -l | awk '{print$2}' | grep '^cron$') ]] && aptPKG+=(cron)
+if [[ -n $aptPKG ]]; then
+  waitAPT
+  apt update && apt install -y $(echo ${aptPKG[@]})
+fi
 mkdir -p /boot/grub
-rm -f /var/cache/apt/archives/lock
-rm -f /var/lib/apt/lists/lock
-rm -f /var/lib/dpkg/lock
-rm -f /var/lib/dpkg/lock-frontend
+mkdir -p /etc/apt/keyrings
+waitAPT
 dpkg --configure -a
 
 
@@ -90,29 +104,33 @@ rm -rf /tmp/now.cron
 
 cleanOldKernels() {
   local kernel_type=$1
+  local running_kernel=$(uname -r)
   
 if [[ $kernel_type == "zabbly" ]]; then
   rm -rf /etc/apt/sources.list.d/xanmod-kernel.list
   rm -rf /etc/apt/keyrings/xanmod.gpg
   rm -rf /etc/apt/sources.list.d/liquorix-kernel.list
   rm -rf /etc/apt/keyrings/liquorix.gpg
+  rm -rf /etc/apt/keyrings/zabbly.asc
 elif [[ $kernel_type == "xanmod" ]]; then
   rm -rf /etc/apt/sources.list.d/zabbly-kernel.list
   rm -rf /etc/apt/keyrings/zabbly.gpg
+  rm -rf /etc/apt/keyrings/zabbly.asc
   rm -rf /etc/apt/sources.list.d/liquorix-kernel.list
   rm -rf /etc/apt/keyrings/liquorix.gpg
 elif [[ $kernel_type == "liquorix" ]]; then
   rm -rf /etc/apt/sources.list.d/zabbly-kernel.list
   rm -rf /etc/apt/keyrings/zabbly.gpg
+  rm -rf /etc/apt/keyrings/zabbly.asc
   rm -rf /etc/apt/sources.list.d/xanmod-kernel.list
   rm -rf /etc/apt/keyrings/xanmod.gpg
 fi
   
-  dpkg --list | awk '{print $2}' | grep 'linux-image' | sed "/$kernel_type/d" | while read line; do
+  dpkg --list | awk '{print $2}' | grep 'linux-image' | sed "/$kernel_type/d" | grep -Fv "$running_kernel" | while read -r line; do
     apt autoremove --purge -y $line
   done
 
-  dpkg --list | awk '{print $2}' | grep 'linux-headers' | sed "/$kernel_type/d" | while read line; do
+  dpkg --list | awk '{print $2}' | grep 'linux-headers' | sed "/$kernel_type/d" | grep -Fv "$running_kernel" | while read -r line; do
     apt autoremove --purge -y $line
   done
   
@@ -172,9 +190,19 @@ ZBqN6R8SuRc5NWWPDcSdr1myXY2YpB0AVEV8zGtF
 =tHYp
 -----END PGP PUBLIC KEY BLOCK-----
 EOF
-echo "deb [signed-by=/etc/apt/keyrings/zabbly.asc] http://pkgs.zabbly.com/kernel/stable $(cat /etc/os-release | grep VERSION= | cut -d'(' -f2 | cut -d')' -f1) main" >/etc/apt/sources.list.d/zabbly-kernel.list
+echo "deb [signed-by=/etc/apt/keyrings/zabbly.asc] https://pkgs.zabbly.com/kernel/stable $(cat /etc/os-release | grep VERSION= | cut -d'(' -f2 | cut -d')' -f1) main" >/etc/apt/sources.list.d/zabbly-kernel.list
 
-apt update && apt install linux-zabbly
+apt update
+if [[ -z $(apt-cache policy linux-zabbly 2>/dev/null | awk '$1 == "Candidate:" && $2 != "(none)" {print $2}') ]]; then
+  echo -e "${WHITE}[ ${RED}✕ ${WHITE}]\c" && echo -e "\t${WHITE}Zabbly package index unavailable${cRES}"
+  rm -rf /etc/apt/sources.list.d/zabbly-kernel.list
+  rm -rf /etc/apt/keyrings/zabbly.gpg /etc/apt/keyrings/zabbly.asc
+  echo -e "${WHITE}[ ${YELLOW}! ${WHITE}]\c" && echo -e "\t${YELLOW}Clear up & Exit${cRES}"
+  exit 1
+fi
+apt clean
+apt autoclean
+apt install -y linux-zabbly
 
 if [[ -n $(dpkg --list | grep linux-image | grep zabbly) ]]; then
   cleanOldKernels "zabbly"
@@ -190,7 +218,7 @@ else
   done
 
   rm -rf /etc/apt/sources.list.d/zabbly-kernel.list
-  rm -rf /etc/apt/keyrings/zabbly.gpg
+  rm -rf /etc/apt/keyrings/zabbly.gpg /etc/apt/keyrings/zabbly.asc
   echo -e "${WHITE}[ ${YELLOW}! ${WHITE}]\c" && echo -e "\t${YELLOW}Clear up & Exit${cRES}"
   exit
 fi
@@ -262,7 +290,7 @@ ukDDFZMifwa03yTHD/a57O4dFOnzsEVojBnbzQ7W7w==
 -----END PGP PUBLIC KEY BLOCK-----
 EOF
 cat /tmp/xanmod.gpg.key | gpg --dearmor >/etc/apt/keyrings/xanmod.gpg
-echo "deb [signed-by=/etc/apt/keyrings/xanmod.gpg] http://deb.xanmod.org releases main" >/etc/apt/sources.list.d/xanmod-kernel.list
+echo "deb [signed-by=/etc/apt/keyrings/xanmod.gpg] https://deb.xanmod.org releases main" >/etc/apt/sources.list.d/xanmod-kernel.list
 
 apt update && apt install linux-xanmod-x64$CPU_LEVEL
 
@@ -297,7 +325,7 @@ if [[ $architecture != "amd64" ]]; then
 elif [[ $architecture == "amd64" ]]; then
 curl -fsSLo /tmp/liquorix.gpg.key https://liquorix.net/liquorix-keyring.gpg
 cat /tmp/liquorix.gpg.key | gpg --dearmor >/etc/apt/keyrings/liquorix.gpg
-echo "deb [signed-by=/etc/apt/keyrings/liquorix.gpg] http://liquorix.net/debian $(cat /etc/os-release | grep VERSION= | cut -d'(' -f2 | cut -d')' -f1) main" >/etc/apt/sources.list.d/liquorix-kernel.list
+echo "deb [signed-by=/etc/apt/keyrings/liquorix.gpg] https://liquorix.net/debian $(cat /etc/os-release | grep VERSION= | cut -d'(' -f2 | cut -d')' -f1) main" >/etc/apt/sources.list.d/liquorix-kernel.list
 
 apt update && apt install linux-image-liquorix-amd64 linux-headers-liquorix-amd64
 

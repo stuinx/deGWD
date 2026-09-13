@@ -9,23 +9,34 @@ CYAN='\E[1;36m'
 WHITE='\E[1;37m'
 cRES='\E[0m'
 
-chmod 777 /tmp
+chmod 1777 /tmp
 architecture=$(dpkg --print-architecture)
 export DEBIAN_FRONTEND=noninteractive
 TTYD_Ver="1.7.3"
-branch="main"
+branch="dev"
 
 
 installCMD=`cat << EOF
-bash <(wget --no-check-certificate -qO- https://ghproxy.net/https://raw.githubusercontent.com/jacyl4/de_GWD/main/client)
+bash <(wget --no-check-certificate -qO- https://raw.githubusercontent.com/stuinx/deGWD/$branch/client)
 EOF
 `
 
-if [[ $architecture = "arm64" ]];then
-chnAPTsource="mirrors.tuna.tsinghua.edu.cn"
-elif [[ $architecture = "amd64" ]]; then
-chnAPTsource="mirrors.aliyun.com"
-fi
+chnAPTsource="mirrors.ustc.edu.cn"
+
+[[ -f "/etc/apt/sources.list.d/debian.sources" ]] && mv -f "/etc/apt/sources.list.d/debian.sources" "/etc/apt/debian.sources.disabled"
+
+waitAPT(){
+local timeout=180
+while pgrep -x apt >/dev/null 2>&1 || pgrep -x apt-get >/dev/null 2>&1 || pgrep -x dpkg >/dev/null 2>&1 || pgrep -x unattended-upgrade >/dev/null 2>&1; do
+  if (( timeout <= 0 )); then
+    echo -e "${WHITE}APT lock${RED} is still held${cRES}"
+    return 1
+  fi
+  sleep 1
+  ((timeout--))
+done
+return 0
+}
 
 pkgDEP1(){
 if [[ $architecture = "arm64" ]];then
@@ -35,7 +46,8 @@ Freeze_Package+=($(dpkg -l | grep 'linux-image-' | awk '{print $2}'))
 Freeze_Package+=($(dpkg -l | grep 'linux-headers-' | awk '{print $2}'))
 Freeze_Package+=($(dpkg -l | grep 'linux-dtb-' | awk '{print $2}'))
 echo ${Freeze_Package[@]} | xargs -n1 apt-mark hold
-apt update && apt install apparmor apparmor-utils google-perftools
+waitAPT || return 1
+apt update && apt install -y apparmor apparmor-utils google-perftools || return 1
 fi
 
 [[ -n $(dpkg -l | awk '{print$2}' | grep '^ipset$') ]] && apt remove --purge ipset
@@ -56,6 +68,7 @@ unset aptPKG
 [[ -z $(dpkg -l | awk '{print$2}' | grep '^resolvconf$') ]] && aptPKG+=(resolvconf)
 [[ -z $(dpkg -l | awk '{print$2}' | grep '^nftables$') ]] && aptPKG+=(nftables)
 [[ -z $(dpkg -l | awk '{print$2}' | grep '^ca-certificates$') ]] && aptPKG+=(ca-certificates)
+[[ -z $(dpkg -l | awk '{print$2}' | grep '^cron$') ]] && aptPKG+=(cron)
 [[ -z $(dpkg -l | awk '{print$2}' | grep '^apt-transport-https$') ]] && aptPKG+=(apt-transport-https)
 [[ -z $(dpkg -l | awk '{print$2}' | grep '^gnupg2$') ]] && aptPKG+=(gnupg2)
 [[ -z $(dpkg -l | awk '{print$2}' | grep '^unzip$') ]] && aptPKG+=(unzip)
@@ -66,12 +79,26 @@ unset aptPKG
 [[ -z $(dpkg -l | awk '{print$2}' | grep '^rng-tools-debian$') ]] && aptPKG+=(rng-tools-debian)
 [[ -z $(dpkg -l | awk '{print$2}' | grep '^chrony$') ]] && aptPKG+=(chrony)
 [[ -z $(dpkg -l | awk '{print$2}' | grep '^irqbalance$') ]] && [[ $(nproc --all) -gt 1 ]] && aptPKG+=(irqbalance)
-[[ -n $aptPKG ]] && apt update && apt install $(echo ${aptPKG[@]})
+if [[ -n $aptPKG ]]; then
+waitAPT || return 1
+apt update && apt install -y "${aptPKG[@]}" || return 1
+fi
+systemctl enable --now cron >/dev/null 2>&1 || return 1
+return 0
 }
 
 pkgDEP2(){
-curl -fsSL https://download.docker.com/linux/debian/gpg | install -m 0644 -D /dev/stdin /usr/share/keyrings/docker-archive-keyring.gpg
-echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/debian $(cat /etc/os-release | grep VERSION= | cut -d'(' -f2 | cut -d')' -f1) stable" >/etc/apt/sources.list.d/docker.list
+local dockerKey=/usr/share/keyrings/docker-ce-archive-keyring.gpg
+local dockerKeyTmp
+dockerKeyTmp=$(mktemp) || return 1
+if ! curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors -o "$dockerKeyTmp" https://download.docker.com/linux/debian/gpg || ! gpg --dearmor --yes -o "$dockerKey" "$dockerKeyTmp" || [[ ! -s "$dockerKey" ]]; then
+rm -f "$dockerKeyTmp"
+echo -e "${WHITE}Docker apt key${RED} Download Failed${cRES}"
+return 1
+fi
+rm -f "$dockerKeyTmp"
+chmod 0644 "$dockerKey" || return 1
+echo "deb [arch=$(dpkg --print-architecture) signed-by=$dockerKey] https://download.docker.com/linux/debian $(cat /etc/os-release | grep VERSION= | cut -d'(' -f2 | cut -d')' -f1) stable" >/etc/apt/sources.list.d/docker.list
 
 
 unset aptPKG
@@ -92,7 +119,11 @@ unset aptPKG
 [[ -z $(dpkg -l | awk '{print$2}' | grep '^php7.4-json$') ]] && aptPKG+=(php7.4-json)
 [[ -z $(dpkg -l | awk '{print$2}' | grep '^sqlite3$') ]] && aptPKG+=(sqlite3)
 [[ -z $(dpkg -l | awk '{print$2}' | grep '^libmimalloc2.0') ]] && aptPKG+=(libmimalloc2.0)
-[[ -n $aptPKG ]] && apt update && apt install $(echo ${aptPKG[@]})
+if [[ -n $aptPKG ]]; then
+waitAPT || return 1
+apt update && apt install -y "${aptPKG[@]}" || return 1
+fi
+return 0
 }
 
 checkSum(){
@@ -432,36 +463,32 @@ try_connect() {
     local attempts=3
     local timeout=3
     local attempt=1
-    local response
 
     while [ $attempt -le $attempts ]; do
-        echo "Attempt $attempt to connect to $url"
-        response=$(curl -Is -m $timeout "$url")
-        if [ $? -eq 0 ]; then
-            echo "Successfully connected to $url"
-            echo "$response"
+        if curl -IsS --connect-timeout "$timeout" --max-time "$timeout" "$url" >/dev/null 2>&1; then
             return 0
-        else
-            echo "Failed to connect to $url"
-            ((attempt++))
-            [ $attempt -le $attempts ] && sleep 1
         fi
+        ((attempt++))
+        [ $attempt -le $attempts ] && sleep 1
     done
-    echo "Failed to connect to $url after $attempts attempts"
     return 1
 }
 
 # Execute connections
-serverConnect1=$(try_connect "google.com")
-serverConnect2=$(try_connect "1.1.1.1")
+try_connect "1.1.1.1"
+serverConnect1=$?
+try_connect "google.com"
+serverConnect2=$?
 
 if [[ $1 = "u" ]]; then
     if [[ $2 = "a" ]]; then
-        preDL
-        updateGWD_Green
-        [[ -z $serverConnect1 ]] || [[ -z $serverConnect2 ]] && exit
+        if [[ $serverConnect1 -ne 0 ]] || [[ $serverConnect2 -ne 0 ]]; then
+            return 1
+        fi
+        preDL || return 1
+        updateGWD_Green || return 1
     else
-        if [[ -n $serverConnect1 ]] && [[ -n $serverConnect2 ]] && [[ $(systemctl is-active 'vtrui') = "active" ]]; then
+        if [[ $serverConnect1 -eq 0 ]] && [[ $serverConnect2 -eq 0 ]] && [[ $(systemctl is-active 'vtrui') = "active" ]]; then
         echo -e "${WHITE}de_GWD server connect  ${cRES}\c" && echo -e "\t${WHITE}[${GREEN} ✓ ${WHITE}]${cRES}"
         de_GWDconnect_check="OK"
             echo -e "${GREEN}================================= ${cRES}"
@@ -483,26 +510,17 @@ if [[ $1 = "u" ]]; then
         fi
     fi
 else
-    if [[ -n $serverConnect1 ]] && [[ -n $serverConnect2 ]] && [[ $(systemctl is-active 'vtrui') = "active" ]]; then
+    if [[ $serverConnect1 -eq 0 ]] && [[ $serverConnect2 -eq 0 ]] && [[ $(systemctl is-active 'vtrui') = "active" ]]; then
         echo -e "${WHITE}[ ${GREEN}✓ ${WHITE}]\c" && echo -e "\t${WHITE}de_GWD server connect${cRES}"
     else
         echo -e "${WHITE}[ ${RED}✕ ${WHITE}]\c" && echo -e "\t${WHITE}de_GWD server connect${cRES}"
     fi
 
 
-if [[ -z $serverConnect1 ]] || [[ -z $serverConnect2 ]]; then
+if [[ $serverConnect1 -ne 0 ]] || [[ $serverConnect2 -ne 0 ]] || [[ $(systemctl is-active 'vtrui') != "active" ]]; then
 serverStatus
-echo -e "\t${RED}Failed! Stop mosdns smartdns nftables.${cRES}"
-cat << EOF >/etc/resolv.conf
-nameserver 119.29.29.29
-nameserver 180.76.76.76
-nameserver 114.114.114.114
-nameserver 223.5.5.5
-EOF
-systemctl stop mosdns >/dev/null 2>&1
-systemctl stop smartdns >/dev/null 2>&1
-systemctl stop nftables >/dev/null 2>&1
-exit
+echo -e "\t${YELLOW}Connection check failed; services kept running.${cRES}"
+return 1
 fi
 fi
 }
@@ -1422,7 +1440,7 @@ EOF
 chmod +x /opt/de_GWD/nftables/SET_V2NODE.nft
 /opt/de_GWD/nftables/SET_V2NODE.nft
 
-if [[ $(du -sk /opt/de_GWD/.repo/IPchnroute 2>/dev/null | awk '{print$1}') -gt 100 ]]; then
+if [[ $(du -sk /opt/de_GWD/.repo/IPchnroute 2>/dev/null | awk '{print$1}') -ge 100 ]]; then
 cp -f /opt/de_GWD/.repo/IPchnroute /opt/de_GWD/nftables/IP_CHNROUTE
 sed -i '/^\s*$/d' /opt/de_GWD/nftables/IP_CHNROUTE
 sed -i 's/$/,/g' /opt/de_GWD/nftables/IP_CHNROUTE
@@ -2190,7 +2208,20 @@ cp -f /opt/de_GWD/.repo/version.php /var/www/html/act/version.php
 
 pullpihole(){
 echo -e "${WHITE}[...]\c" && echo -e "\t${WHITE}Install Pi-hole${cRES}\r\c"
-docker pull pihole/pihole:latest
+systemctl stop nftables vtrui >/dev/null 2>&1
+if docker image inspect pihole/pihole:latest >/dev/null 2>&1; then
+  systemctl start nftables >/dev/null 2>&1
+  return 0
+fi
+if docker pull pihole/pihole:latest || \
+   { docker pull mps.rxm.xyz/pihole/pihole:latest &&
+     docker tag mps.rxm.xyz/pihole/pihole:latest pihole/pihole:latest; }; then
+  systemctl start nftables >/dev/null 2>&1
+  return 0
+fi
+systemctl start nftables >/dev/null 2>&1
+echo -e "${WHITE}Pi-hole image${RED} Download Failed${cRES}"
+return 1
 }
 
 
@@ -2225,9 +2256,14 @@ docker run -d \
 -v /etc/localtime:/etc/localtime \
 -v /opt/de_GWD/pihole:/etc/pihole \
 -v /etc/dnsmasq.d:/etc/dnsmasq.d \
-pihole/pihole:latest
+pihole/pihole:latest || return 1
 
-python3 <<EOF
+if [[ $(docker inspect -f '{{.State.Running}}' pihole 2>/dev/null) != "true" ]]; then
+  echo -e "${WHITE}Pi-hole${RED} Start Failed${cRES}"
+  return 1
+fi
+
+if ! python3 <<EOF
 import toml
 with open("/opt/de_GWD/pihole/pihole.toml", "r") as f:
  data = toml.load(f)
@@ -2237,6 +2273,9 @@ data['webserver']['api']['pwhash'] = "$piholePW"
 with open("/opt/de_GWD/pihole/pihole.toml", "w") as f:
     toml.dump(data, f)
 EOF
+then
+  return 1
+fi
 }
 
 
@@ -2248,7 +2287,7 @@ systemctl daemon-reload >/dev/null
 
 update-rc.d -f dhcpd remove >/dev/null 2>&1
 
-python3 <<EOF
+if ! python3 <<EOF
 import toml
 with open("/opt/de_GWD/pihole/pihole.toml", "r") as f:
  data = toml.load(f)
@@ -2277,8 +2316,11 @@ data["misc"]["check"]["load"] = False
 with open("/opt/de_GWD/pihole/pihole.toml", "w") as f:
     toml.dump(data, f)
 EOF
+then
+  return 1
+fi
 
-chmod -R 777 /opt/de_GWD/pihole
+chmod -R 755 /opt/de_GWD/pihole
 
 cat << EOF >/etc/dnsmasq.d/00-extra.conf
 dns-forward-max=10000
@@ -2294,9 +2336,31 @@ echo -e "${WHITE}[ ${GREEN}✓ ${WHITE}]\c" && echo -e "\t${WHITE}Pi-hole Config
 
 
 
+verifyRuntimeResources(){
+local missing=0
+for resource in geoip.dat geosite.dat Domains.chn.txt; do
+  if [[ ! -s "/opt/de_GWD/.repo/$resource" ]]; then
+    echo -e "${WHITE}Runtime resource${RED} missing: $resource${cRES}"
+    missing=1
+  fi
+done
+
+if [[ -s /opt/de_GWD/.repo/geoip.dat ]]; then
+  cp -f /opt/de_GWD/.repo/geoip.dat /opt/de_GWD/vtrui/geoip.dat || missing=1
+fi
+if [[ -s /opt/de_GWD/.repo/geosite.dat ]]; then
+  cp -f /opt/de_GWD/.repo/geosite.dat /opt/de_GWD/vtrui/geosite.dat || missing=1
+fi
+
+return "$missing"
+}
+
+
+
 postInstall(){
 /opt/de_GWD/ui-NodeOne
 /opt/de_GWD/ui_4am
+verifyRuntimeResources || return 1
 /opt/de_GWD/ui_4h
 systemctl restart smartdns
 systemctl restart mosdns
@@ -2364,10 +2428,6 @@ cat << "EOF" >/etc/rc_kernel.local
 #!/bin/bash
 PATH='/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
 
-rm -f /var/cache/apt/archives/lock
-rm -f /var/lib/apt/lists/lock
-rm -f /var/lib/dpkg/lock
-rm -f /var/lib/dpkg/lock-frontend
 dpkg --configure -a
 
 dpkg --list | grep linux-image | awk '{print $2}' | grep -Fv $(uname -r) | while read line; do
@@ -2395,7 +2455,18 @@ cat << EOF >>/tmp/now.cron
 EOF
 crontab /tmp/now.cron
 rm -rf /tmp/now.cron
-service cron restart
+systemctl enable --now cron >/dev/null 2>&1 || return 1
+
+for service in smartdns mosdns vtrui nftables nginx php7.4-fpm; do
+  if ! systemctl is-active --quiet "$service"; then
+    echo -e "${WHITE}Service${RED} failed: $service${cRES}"
+    return 1
+  fi
+done
+if [[ $(docker inspect -f '{{.State.Running}}' pihole 2>/dev/null) != "true" ]]; then
+  echo -e "${WHITE}Pi-hole${RED} is not running${cRES}"
+  return 1
+fi
 
 rm -rf /tmp/ui-script
 rm -rf /tmp/ui-web
@@ -2410,7 +2481,7 @@ fi
 
 
 installkernel(){
-bash <(wget --show-progress -cqO- https://raw.githubusercontent.com/jacyl4/de_GWD/main/resource/kernel/installkernel)
+bash <(wget --show-progress -cqO- https://raw.githubusercontent.com/stuinx/deGWD/$branch/resource/kernel/installkernel)
 }
 
 
@@ -2559,8 +2630,6 @@ installSmartDNS
 
 installXray
 
-installNftables
-
 echo "{}" >/opt/de_GWD/0conf
 jq '.address={}' /opt/de_GWD/0conf |\
 jq '.dns={}' |\
@@ -2584,8 +2653,6 @@ jq --arg path "$path" '.update.v2node.path=$path' | sponge /opt/de_GWD/0conf
 [[ -n $doh1 ]] && jq --arg doh1 "$doh1" '.dns.doh+=[$doh1]' /opt/de_GWD/0conf | sponge /opt/de_GWD/0conf
 chmod 666 /opt/de_GWD/0conf
 
-de_GWDconnect
-
 updateAPT
 
 apt --reinstall install ca-certificates
@@ -2600,13 +2667,17 @@ nginxSet
 
 installWebUI
 
-pullpihole
+pullpihole || exit 1
 
-installPihole
+installNftables
 
-piholeSet
+installPihole || exit 1
 
-postInstall
+piholeSet || exit 1
+
+de_GWDconnect
+
+postInstall || exit 1
 
 echo -e "${WHITE}[ ${GREEN}✓ ${WHITE}]\c" && echo -e "\t${WHITE}de_GWD ${GREEN}Installed${cRES}"
 }
@@ -2650,9 +2721,9 @@ installSmartDNS
 
 installXray
 
-installNftables
-
 pullpihole
+
+installNftables
 
 installPihole
 
@@ -2672,10 +2743,6 @@ installSmartDNS
 
 installXray
 
-installNftables
-
-de_GWDconnect
-
 updateAPT
 
 installDep
@@ -2690,11 +2757,15 @@ installWebUI
 
 pullpihole
 
+installNftables
+
 installPihole
 
 piholeSet
 
-postInstall
+de_GWDconnect
+
+postInstall || exit 1
 }
 
 
@@ -2769,7 +2840,7 @@ else
   echo -e "${WHITE} GeoIP          \c" && echo -e "${WHITE}[ ${RED}✕ ${WHITE}]${cRES}"
 fi
 
-if [[ $(du -sk /opt/de_GWD/nftables/IP_CHNROUTE 2>/dev/null | awk '{print$1}') -gt 100 ]]; then
+if [[ $(du -sk /opt/de_GWD/nftables/IP_CHNROUTE 2>/dev/null | awk '{print$1}') -ge 100 ]]; then
   echo -e "${WHITE} ChnrouteIP     \c" && echo -e "${WHITE}[ ${GREEN}✓ ${WHITE}]${cRES}"
 else
   echo -e "${WHITE} ChnrouteIP     \c" && echo -e "${WHITE}[ ${RED}✕ ${WHITE}]${cRES}"
