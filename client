@@ -1457,7 +1457,7 @@ EOF
 chmod +x /opt/de_GWD/nftables/SET_V2NODE.nft
 /opt/de_GWD/nftables/SET_V2NODE.nft
 
-if [[ $(du -sk /opt/de_GWD/.repo/IPchnroute 2>/dev/null | awk '{print$1}') -gt 100 ]]; then
+if [[ -s /opt/de_GWD/.repo/IPchnroute ]]; then
 cp -f /opt/de_GWD/.repo/IPchnroute /opt/de_GWD/nftables/IP_CHNROUTE
 sed -i '/^\s*$/d' /opt/de_GWD/nftables/IP_CHNROUTE
 sed -i 's/$/,/g' /opt/de_GWD/nftables/IP_CHNROUTE
