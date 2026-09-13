@@ -2216,9 +2216,9 @@ if docker image inspect pihole/pihole:latest >/dev/null 2>&1; then
   systemctl start nftables >/dev/null 2>&1
   return 0
 fi
-if docker pull pihole/pihole:latest || \
-   { docker pull mps.rxm.xyz/pihole/pihole:latest &&
-     docker tag mps.rxm.xyz/pihole/pihole:latest pihole/pihole:latest; }; then
+if { docker pull mps.rxm.xyz/pihole/pihole:latest &&
+     docker tag mps.rxm.xyz/pihole/pihole:latest pihole/pihole:latest; } || \
+   docker pull pihole/pihole:latest; then
   systemctl start nftables >/dev/null 2>&1
   return 0
 fi
