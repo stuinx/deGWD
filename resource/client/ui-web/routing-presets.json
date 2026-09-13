@@ -1,0 +1,133 @@
+{
+  "youtube": {
+    "label": "YouTube",
+    "domains": [
+      "geosite:youtube"
+    ]
+  },
+  "openai": {
+    "label": "OpenAI",
+    "domains": [
+      "domain:openai.com",
+      "domain:chatgpt.com",
+      "domain:oaistatic.com",
+      "domain:oaiusercontent.com"
+    ]
+  },
+  "claude": {
+    "label": "Claude",
+    "domains": [
+      "domain:claude.ai",
+      "domain:claude.com",
+      "domain:anthropic.com"
+    ]
+  },
+  "gemini": {
+    "label": "Gemini",
+    "domains": [
+      "domain:gemini.google.com",
+      "domain:aistudio.google.com",
+      "domain:ai.google.dev",
+      "domain:generativelanguage.googleapis.com",
+      "domain:alkalimakersuite-pa.clients6.google.com",
+      "domain:makersuite.google.com"
+    ]
+  },
+  "grok": {
+    "label": "Grok",
+    "domains": [
+      "domain:grok.com",
+      "domain:x.ai"
+    ]
+  },
+  "wikipedia": {
+    "label": "Wikipedia",
+    "domains": [
+      "domain:wikipedia.org",
+      "domain:wikimedia.org",
+      "domain:wikimediafoundation.org",
+      "domain:mediawiki.org",
+      "domain:wikidata.org"
+    ]
+  },
+  "reddit": {
+    "label": "Reddit",
+    "domains": [
+      "domain:reddit.com",
+      "domain:redd.it",
+      "domain:redditmedia.com",
+      "domain:redditstatic.com",
+      "domain:redditinc.com"
+    ]
+  },
+  "github": {
+    "label": "GitHub",
+    "domains": [
+      "domain:github.com",
+      "domain:github.io",
+      "domain:githubusercontent.com",
+      "domain:githubassets.com",
+      "domain:githubstatus.com",
+      "domain:ghcr.io",
+      "domain:githubcopilot.com"
+    ]
+  },
+  "discord": {
+    "label": "Discord",
+    "domains": [
+      "domain:discord.com",
+      "domain:discord.gg",
+      "domain:discordapp.com",
+      "domain:discordapp.net",
+      "domain:discord.media",
+      "domain:discordcdn.com"
+    ]
+  },
+  "telegram": {
+    "label": "Telegram",
+    "domains": [
+      "domain:telegram.org",
+      "domain:t.me",
+      "domain:telegram.me",
+      "domain:telegra.ph",
+      "domain:telegram.dog",
+      "domain:telesco.pe"
+    ],
+    "ips": [
+      "geoip:telegram"
+    ]
+  },
+  "twitter": {
+    "label": "X / Twitter",
+    "domains": [
+      "domain:x.com",
+      "domain:twitter.com",
+      "domain:t.co",
+      "domain:twimg.com",
+      "domain:tweetdeck.com"
+    ]
+  },
+  "apple": {
+    "label": "Apple",
+    "default": "direct",
+    "domains": [
+      "geosite:apple",
+      "geosite:apple-ads",
+      "geosite:apple-dev",
+      "geosite:apple-update",
+      "geosite:icloud",
+      "geosite:apple@cn",
+      "geosite:apple-cn"
+    ]
+  },
+  "steam": {
+    "label": "Steam 国内下载",
+    "default": "direct",
+    "toggle": true,
+    "domains": [
+      "domain:steamserver.net",
+      "geosite:steam@cn",
+      "geosite:category-games@cn"
+    ]
+  }
+}

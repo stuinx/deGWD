@@ -141,10 +141,9 @@ fi
 if [[ -n $(openssl x509 -enddate -noout -in /var/www/ssl/de_GWD.cer -checkend 259200 | grep "Certificate will expire") ]] && [[ -d "/root/.acme.sh" ]]; then
 "/root/.acme.sh"/acme.sh --force --set-default-ca  --server letsencrypt
 "/root/.acme.sh"/acme.sh --force --cron --home "/root/.acme.sh"
-
-sslFolder=$(ls "/root/.acme.sh" | grep '_ecc')
-cp -f "/root/.acme.sh"/$sslFolder/fullchain.cer /var/www/ssl/de_GWD.cer
-cp -f "/root/.acme.sh"/$sslFolder/*.key /var/www/ssl/de_GWD.key
+chmod 600 /var/www/ssl/de_GWD.key
+systemctl force-reload nginx
+if systemctl is-active --quiet extra-xray; then systemctl restart extra-xray; fi
 fi
 
 [[ $1 = "u" ]] && service cron restart

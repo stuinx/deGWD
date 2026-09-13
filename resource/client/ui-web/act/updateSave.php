@@ -13,13 +13,12 @@ $newJsonString = json_encode($conf, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE |
 file_put_contents('/opt/de_GWD/0conf', $newJsonString);
 
 
-$updateURL = strpos($updateCMD,"https");
-$updateURL = substr($updateCMD, $updateURL);
-$updateURL = substr($updateURL, 0, strlen($updateURL)-1);
-
-exec("sudo curl -fsSL -o /opt/de_GWD/update $updateURL &");
-
-exec("sudo /opt/de_GWD/ui-updateSave &");
+exec("sudo /opt/de_GWD/ui-updateSave 2>&1", $updateOutput, $updateStatus);
+if ($updateStatus !== 0) {
+    http_response_code(502);
+    echo "更新脚本下载失败";
+    exit;
+}
 
 if(filter_var($updateAddr, FILTER_VALIDATE_IP)) {
 } else {

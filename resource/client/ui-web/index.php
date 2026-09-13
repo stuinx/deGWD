@@ -231,167 +231,23 @@
     <div class="modal-content">
       <div class="modal-body">
 
-<div class="input-group input-group-sm mb-3">
-  <div class="input-group-prepend">
-    <span class="input-group-text border-danger bg-danger text-white">YouTube</span>
-  </div>
-  <div class="input-group-append">
-      <button id="nodeSMshowYoutube" class="btn btn-outline-secondary dropdown-toggle border-left-0" type="button" data-toggle="dropdown"></button>
-      <div id="nodeSMyoutube" class="dropdown-menu">
-<a class='dropdown-item' href='#' id='nodeSMyoutube0' onclick="buttonNodeSMyoutube(this)"> 默认代理 </a>
 <?php
-for( $i=0; $i<count($de_GWDconf->v2node); $i++){
-  $name = $de_GWDconf->v2node[$i]->name;
-  $num = $i+1;
-print <<<EOT
-<a class='dropdown-item' href='#' id='nodeSMyoutube$num' onclick="buttonNodeSMyoutube(this)">$name</a>
-EOT;
-}
+$presets = json_decode(file_get_contents(__DIR__ . '/routing-presets.json'), true);
+foreach ($presets as $key => $preset) {
+    $saved = $de_GWDconf->v2nodeDIV->nodeSM->$key ?? '';
 ?>
-      </div>
-  </div>
+<div class="form-group mb-2">
+  <label for="preset-<?php echo $key; ?>"><?php echo htmlspecialchars($preset['label'], ENT_QUOTES, 'UTF-8'); ?></label>
+  <select id="preset-<?php echo $key; ?>" class="form-control form-control-sm node-preset" data-key="<?php echo $key; ?>">
+    <option value="0"><?php echo ($preset['default'] ?? '') === 'direct' ? '直连' : '默认代理'; ?></option>
+<?php if (!empty($preset['toggle'])) { ?>
+    <option value="1" <?php echo $saved ? 'selected' : ''; ?>>默认代理</option>
+<?php } else { foreach (($de_GWDconf->v2node ?? []) as $i => $node) { ?>
+    <option value="<?php echo $i + 1; ?>" <?php echo $saved === $node->domain ? 'selected' : ''; ?>><?php echo htmlspecialchars($node->name, ENT_QUOTES, 'UTF-8'); ?></option>
+<?php } } ?>
+  </select>
 </div>
-
-<div class="input-group input-group-sm mb-3">
-  <div class="input-group-prepend">
-    <span class="input-group-text border-danger bg-white text-danger">NETFLIX</span>
-  </div>
-  <div class="input-group-append">
-      <button id="nodeSMshowNetflix" class="btn btn-outline-secondary dropdown-toggle border-left-0" type="button" data-toggle="dropdown"></button>
-      <div id="nodeSMnetflix" class="dropdown-menu">
-<a class='dropdown-item' href='#' id='nodeSMnetflix0' onclick="buttonNodeSMnetflix(this)"> 默认代理 </a>
-<?php
-for( $i=0; $i<count($de_GWDconf->v2node); $i++){
-  $name = $de_GWDconf->v2node[$i]->name;
-  $num = $i+1;
-print <<<EOT
-<a class='dropdown-item' href='#' id='nodeSMnetflix$num' onclick="buttonNodeSMnetflix(this)">$name</a>
-EOT;
-}
-?>
-      </div>
-  </div>
-</div>
-
-<div class="input-group input-group-sm mb-3">
-  <div class="input-group-prepend">
-    <span class="input-group-text border-dark bg-dark text-white">HBO</span>
-    <span class="input-group-text text-white" style="border-color: #6c3483;background-color: #6c3483;">Disney+</span>
-    <span class="input-group-text text-white" style="border-color: #2ecc71;background-color: #2ecc71;">Hulu</span>
-  </div>
-  <div class="input-group-append">
-      <button id="nodeSMshowHDH" class="btn btn-outline-secondary dropdown-toggle border-left-0" type="button" data-toggle="dropdown"></button>
-      <div id="nodeSMhdh" class="dropdown-menu">
-<a class='dropdown-item' href='#' id='nodeSMhdh0' onclick="buttonNodeSMhdh(this)"> 默认代理 </a>
-<?php
-for( $i=0; $i<count($de_GWDconf->v2node); $i++){
-  $name = $de_GWDconf->v2node[$i]->name;
-  $num = $i+1;
-print <<<EOT
-<a class='dropdown-item' href='#' id='nodeSMhdh$num' onclick="buttonNodeSMhdh(this)">$name</a>
-EOT;
-}
-?>
-      </div>
-  </div>
-</div>
-
-<div class="input-group input-group-sm mb-3">
-  <div class="input-group-prepend">
-    <span class="input-group-text border-primary bg-primary text-white">TVB</span>
-  </div>
-  <div class="input-group-append">
-      <button id="nodeSMshowTVB" class="btn btn-outline-secondary dropdown-toggle border-left-0" type="button" data-toggle="dropdown"></button>
-      <div id="nodeSMtvb" class="dropdown-menu">
-<a class='dropdown-item' href='#' id='nodeSMtvb0' onclick="buttonNodeSMtvb(this)"> 默认代理 </a>
-<?php
-for( $i=0; $i<count($de_GWDconf->v2node); $i++){
-  $name = $de_GWDconf->v2node[$i]->name;
-  $num = $i+1;
-print <<<EOT
-<a class='dropdown-item' href='#' id='nodeSMtvb$num' onclick="buttonNodeSMtvb(this)">$name</a>
-EOT;
-}
-?>
-      </div>
-  </div>
-</div>
-
-<div class="input-group input-group-sm mb-3">
-  <div class="input-group-prepend">
-    <span class="input-group-text text-white" style="border-color: #3AC1DF;background-color: #3AC1DF;">巴哈姆特動畫瘋</span>
-  </div>
-  <div class="input-group-append">
-      <button id="nodeSMshowBahamut" class="btn btn-outline-secondary dropdown-toggle border-left-0" type="button" data-toggle="dropdown"></button>
-      <div id="nodeSMbahamut" class="dropdown-menu">
-<a class='dropdown-item' href='#' id='nodeSMbahamut0' onclick="buttonNodeSMbahamut(this)"> 默认代理 </a>
-<?php
-for( $i=0; $i<count($de_GWDconf->v2node); $i++){
-  $name = $de_GWDconf->v2node[$i]->name;
-  $num = $i+1;
-print <<<EOT
-<a class='dropdown-item' href='#' id='nodeSMbahamut$num' onclick="buttonNodeSMbahamut(this)">$name</a>
-EOT;
-}
-?>
-      </div>
-  </div>
-</div>
-
-<div class="input-group input-group-sm mb-3">
-  <div class="input-group-prepend">
-    <span class="input-group-text text-white" style="border-color: #75A99C;background-color: #75A99C;">OpenAI</span>
-  </div>
-  <div class="input-group-append">
-      <button id="nodeSMshowOpenai" class="btn btn-outline-secondary dropdown-toggle border-left-0" type="button" data-toggle="dropdown"></button>
-      <div id="nodeSMopenai" class="dropdown-menu">
-<a class='dropdown-item' href='#' id='nodeSMopenai0' onclick="buttonNodeSMopenai(this)"> 默认代理 </a>
-<?php
-for( $i=0; $i<count($de_GWDconf->v2node); $i++){
-  $name = $de_GWDconf->v2node[$i]->name;
-  $num = $i+1;
-print <<<EOT
-<a class='dropdown-item' href='#' id='nodeSMopenai$num' onclick="buttonNodeSMopenai(this)">$name</a>
-EOT;
-}
-?>
-      </div>
-  </div>
-</div>
-
-<div class="input-group input-group-sm mb-3">
-  <div class="input-group-prepend">
-    <span class="input-group-text border-secondary bg-secondary text-white">APPLE</span>
-  </div>
-  <div class="input-group-append">
-      <button id="nodeSMshowApple" class="btn btn-outline-secondary dropdown-toggle border-left-0" type="button" data-toggle="dropdown"></button>
-      <div id="nodeSMapple" class="dropdown-menu">
-<a class='dropdown-item' href='#' id='nodeSMapple0' onclick="buttonNodeSMapple(this)"> 直连 </a>
-<?php
-for( $i=0; $i<count($de_GWDconf->v2node); $i++){
-  $name = $de_GWDconf->v2node[$i]->name;
-  $num = $i+1;
-print <<<EOT
-<a class='dropdown-item' href='#' id='nodeSMapple$num' onclick="buttonNodeSMapple(this)">$name</a>
-EOT;
-}
-?>
-      </div>
-  </div>
-</div>
-
-<div class="input-group input-group-sm">
-  <div class="input-group-prepend">
-    <span class="input-group-text text-white" style="border-color: #184053;background-color: #184053;">Steam等国区游戏</span>
-  </div>
-  <div class="input-group-append">
-      <button id="nodeSMshowSteam" class="btn btn-outline-secondary dropdown-toggle border-left-0" type="button" data-toggle="dropdown"></button>
-      <div id="nodeSMsteam" class="dropdown-menu">
-<a class='dropdown-item' href='#' id='nodeSMsteam0' onclick="buttonNodeSMsteam(this)"> 直连 </a>
-<a class='dropdown-item' href='#' id='nodeSMsteam1' onclick="buttonNodeSMsteam(this)"> 默认代理 </a>
-      </div>
-  </div>
-</div>
+<?php } ?>
       </div>
       <div class="modal-footer">
         <button id="submitNodeSMrulesClear" type="button" class="btn btn-outline-secondary btn-sm">
@@ -952,70 +808,6 @@ $('#switch'+SWITCHindex).attr('class', 'btn btn-success btn-sm');
 $.get("./act/NodeChange.php", {nodenum:SWITCHindex}, function(){})
 }
 
-function buttonNodeSMyoutube(buttonNodeSMyoutube){
-var NodeSMyoutubeOBJ = $(buttonNodeSMyoutube).parent().find('a')
-var NodeSMyoutubeIndex = NodeSMyoutubeOBJ.index($(buttonNodeSMyoutube))
-var NodeSMyoutubeName = $('#nodeSMyoutube'+NodeSMyoutubeIndex).html()
-$('#nodeSMshowYoutube').html(NodeSMyoutubeName)
-$('#nodeSMshowYoutube').val(NodeSMyoutubeIndex)
-}
-
-function buttonNodeSMnetflix(buttonNodeSMnetflix){
-var NodeSMnetflixOBJ = $(buttonNodeSMnetflix).parent().find('a')
-var NodeSMnetflixIndex = NodeSMnetflixOBJ.index($(buttonNodeSMnetflix))
-var NodeSMnetflixName = $('#nodeSMnetflix'+NodeSMnetflixIndex).html()
-$('#nodeSMshowNetflix').html(NodeSMnetflixName)
-$('#nodeSMshowNetflix').val(NodeSMnetflixIndex)
-}
-
-function buttonNodeSMhdh(buttonNodeSMhdh){
-var NodeSMhdhOBJ = $(buttonNodeSMhdh).parent().find('a')
-var NodeSMhdhIndex = NodeSMhdhOBJ.index($(buttonNodeSMhdh))
-var NodeSMhdhName = $('#nodeSMhdh'+NodeSMhdhIndex).html()
-$('#nodeSMshowHDH').html(NodeSMhdhName)
-$('#nodeSMshowHDH').val(NodeSMhdhIndex)
-}
-
-function buttonNodeSMtvb(buttonNodeSMtvb){
-var NodeSMtvbOBJ = $(buttonNodeSMtvb).parent().find('a')
-var NodeSMtvbIndex = NodeSMtvbOBJ.index($(buttonNodeSMtvb))
-var NodeSMtvbName = $('#nodeSMtvb'+NodeSMtvbIndex).html()
-$('#nodeSMshowTVB').html(NodeSMtvbName)
-$('#nodeSMshowTVB').val(NodeSMtvbIndex)
-}
-
-function buttonNodeSMbahamut(buttonNodeSMbahamut){
-var NodeSMbahamutOBJ = $(buttonNodeSMbahamut).parent().find('a')
-var NodeSMbahamutIndex = NodeSMbahamutOBJ.index($(buttonNodeSMbahamut))
-var NodeSMbahamutName = $('#nodeSMbahamut'+NodeSMbahamutIndex).html()
-$('#nodeSMshowBahamut').html(NodeSMbahamutName)
-$('#nodeSMshowBahamut').val(NodeSMbahamutIndex)
-}
-
-function buttonNodeSMopenai(buttonNodeSMopenai){
-var NodeSMopenaiOBJ = $(buttonNodeSMopenai).parent().find('a')
-var NodeSMopenaiIndex = NodeSMopenaiOBJ.index($(buttonNodeSMopenai))
-var NodeSMopenaiName = $('#nodeSMopenai'+NodeSMopenaiIndex).html()
-$('#nodeSMshowOpenai').html(NodeSMopenaiName)
-$('#nodeSMshowOpenai').val(NodeSMopenaiIndex)
-}
-
-function buttonNodeSMapple(buttonNodeSMapple){
-var NodeSMappleOBJ = $(buttonNodeSMapple).parent().find('a')
-var NodeSMappleIndex = NodeSMappleOBJ.index($(buttonNodeSMapple))
-var NodeSMappleName = $('#nodeSMapple'+NodeSMappleIndex).html()
-$('#nodeSMshowApple').html(NodeSMappleName)
-$('#nodeSMshowApple').val(NodeSMappleIndex)
-}
-
-function buttonNodeSMsteam(buttonNodeSMsteam){
-var NodeSMsteamOBJ = $(buttonNodeSMsteam).parent().find('a')
-var NodeSMsteamIndex = NodeSMsteamOBJ.index($(buttonNodeSMsteam))
-var NodeSMsteamName = $('#nodeSMsteam'+NodeSMsteamIndex).html()
-$('#nodeSMshowSteam').html(NodeSMsteamName)
-$('#nodeSMshowSteam').val(NodeSMsteamIndex)
-}
-
 function buttonNodeDT(buttonNodeDT){
 var NodeDTobj = $(buttonNodeDT).parent().find('a')
 var NodeDTindex = NodeDTobj.index($(buttonNodeDT))
@@ -1073,40 +865,15 @@ $.get("./act/pingTCPDOH2.php", function(data) { $('#pingDOH2').text(data) })
 $.get("./act/pingTCPDoG.php", function(data) { $('#pingDoG').text(data) })
 })
 
-$('#submitNodeSMrulesClear').click(function(){
-$('#nodeSMshowYoutube').html(' 默认代理 ')
-$('#nodeSMshowYoutube').val('0')
-$('#nodeSMshowNetflix').html(' 默认代理 ')
-$('#nodeSMshowNetflix').val('0')
-$('#nodeSMshowHDH').html(' 默认代理 ')
-$('#nodeSMshowHDH').val('0')
-$('#nodeSMshowTVB').html(' 默认代理 ')
-$('#nodeSMshowTVB').val('0')
-$('#nodeSMshowBahamut').html(' 默认代理 ')
-$('#nodeSMshowBahamut').val('0')
-$('#nodeSMshowOpenai').html(' 默认代理 ')
-$('#nodeSMshowOpenai').val('0')
-$('#nodeSMshowApple').html(' 直连 ')
-$('#nodeSMshowApple').val('0')
-$('#nodeSMshowSteam').html(' 直连 ')
-$('#nodeSMshowSteam').val('0')
-})
-
+$('#submitNodeSMrulesClear').click(function(){ $('.node-preset').val('0') })
 $('#submitNodeSMrules').click(function(){
-$("#submitNodeSMrulesLoading").attr("class", "spinner-border spinner-border-sm ml-2")
-nodeSMshowYoutube=$('#nodeSMshowYoutube').val()
-nodeSMshowNetflix=$('#nodeSMshowNetflix').val()
-nodeSMshowHDH=$('#nodeSMshowHDH').val()
-nodeSMshowTVB=$('#nodeSMshowTVB').val()
-nodeSMshowBahamut=$('#nodeSMshowBahamut').val()
-nodeSMshowOpenai=$('#nodeSMshowOpenai').val()
-nodeSMshowApple=$('#nodeSMshowApple').val()
-nodeSMshowSteam=$('#nodeSMshowSteam').val()
-$.get('./act/NodeSMrules.php', {nodeSMshowYoutube:nodeSMshowYoutube, nodeSMshowNetflix:nodeSMshowNetflix, nodeSMshowHDH:nodeSMshowHDH, nodeSMshowTVB:nodeSMshowTVB, nodeSMshowBahamut:nodeSMshowBahamut, nodeSMshowOpenai:nodeSMshowOpenai, nodeSMshowApple:nodeSMshowApple, nodeSMshowSteam:nodeSMshowSteam}, function(result){
-  $("#submitNodeSMrulesLoading").removeClass()
-  $("#nodeSMrules").modal('hide')
-  window.location.reload()
-})
+  const selections = {};
+  $('.node-preset').each(function(){ selections[$(this).data('key')] = Number($(this).val()) });
+  $('#submitNodeSMrulesLoading').attr('class', 'spinner-border spinner-border-sm ml-2');
+  $.post('./act/NodeSMrules.php', {selections: JSON.stringify(selections)})
+    .done(function(){ window.location.reload() })
+    .fail(function(xhr){ alert(xhr.responseText || '规则保存失败') })
+    .always(function(){ $('#submitNodeSMrulesLoading').removeClass() });
 })
 
 $('#buttonclearDIV').click(function(){
@@ -1255,66 +1022,7 @@ if(data != "") {
 }
 })
 
-$.get('./act/NodeSMcheck.php', function(data){
-let SMarray = data.split("\n")
-let youtubeNum = SMarray[0]
-let youtubeName = SMarray[1]
-if (youtubeName == "-none-") {
-    youtubeName = " 默认代理 "
-}
-let netflixNum = SMarray[2]
-let netflixName = SMarray[3]
-if (netflixName == "-none-") {
-    netflixName = " 默认代理 "
-}
-let hdhNum = SMarray[4]
-let hdhName = SMarray[5]
-if (hdhName == "-none-") {
-    hdhName = " 默认代理 "
-}
-let tvbNum = SMarray[6]
-let tvbName = SMarray[7]
-if (tvbName == "-none-") {
-    tvbName = " 默认代理 "
-}
-let bahamutNum = SMarray[8]
-let bahamutName = SMarray[9]
-if (bahamutName == "-none-") {
-    bahamutName = " 默认代理 "
-}
-let openaiNum = SMarray[10]
-let openaiName = SMarray[11]
-if (openaiName == "-none-") {
-    openaiName = " 默认代理 "
-}
-let appleNum = SMarray[12]
-let appleName = SMarray[13]
-if (appleName == "-none-") {
-    appleName = " 直连 "
-}
-let steamNum = SMarray[14]
-let steamName = SMarray[15]
-if (steamName == "-none-") {
-    steamName = " 直连 "
-}
 
-$('#nodeSMshowYoutube').val(youtubeNum)
-$('#nodeSMshowYoutube').html(youtubeName)
-$('#nodeSMshowNetflix').val(netflixNum)
-$('#nodeSMshowNetflix').html(netflixName)
-$('#nodeSMshowHDH').val(hdhNum)
-$('#nodeSMshowHDH').html(hdhName)
-$('#nodeSMshowTVB').val(tvbNum)
-$('#nodeSMshowTVB').html(tvbName)
-$('#nodeSMshowBahamut').val(bahamutNum)
-$('#nodeSMshowBahamut').html(bahamutName)
-$('#nodeSMshowOpenai').val(openaiNum)
-$('#nodeSMshowOpenai').html(openaiName)
-$('#nodeSMshowApple').val(appleNum)
-$('#nodeSMshowApple').html(appleName)
-$('#nodeSMshowSteam').val(steamNum)
-$('#nodeSMshowSteam').html(steamName)
-})
 })
 </script>
 

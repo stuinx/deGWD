@@ -9,12 +9,38 @@ CYAN='\E[1;36m'
 WHITE='\E[1;37m'
 cRES='\E[0m'
 dockerComposeVer_reserved="1.29.2"
+GWD_DOCKER_SOURCE=${GWD_DOCKER_SOURCE:-https://mirrors.tuna.tsinghua.edu.cn/docker-ce}
+GWD_DOCKER_GPG_SOURCE=${GWD_DOCKER_GPG_SOURCE:-https://download.docker.com}
+GWD_GITHUB_PROXY=${GWD_GITHUB_PROXY:-}
+
+gwdDockerDownload(){
+    local url=$1 output=$2 temporary candidate
+    temporary=$(mktemp "${output}.download.XXXXXX") || return 1
+    local urls=("$url")
+    if [[ -n $GWD_GITHUB_PROXY && $url == https://github.com/* ]]; then
+        [[ $GWD_GITHUB_PROXY == https://* ]] || { rm -f "$temporary"; return 1; }
+        urls=("${GWD_GITHUB_PROXY%/}/$url" "$url")
+    fi
+    for candidate in "${urls[@]}"; do
+        if curl -fSL --retry 2 --connect-timeout 10 --max-time 300 "$candidate" -o "$temporary" && [[ -s $temporary ]]; then
+            mv -f -- "$temporary" "$output"
+            return $?
+        fi
+    done
+    rm -f -- "$temporary"
+    return 1
+}
 
 
 
 installDocker(){
-curl -fsSLo- https://download.docker.com/linux/debian/gpg | gpg --dearmor >/usr/share/keyrings/docker-ce-archive-keyring.gpg
-echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-ce-archive-keyring.gpg] https://download.docker.com/linux/debian $(cat /etc/os-release | grep VERSION= | cut -d'(' -f2 | cut -d')' -f1) stable" >/etc/apt/sources.list.d/docker.list
+[[ $GWD_DOCKER_SOURCE == https://* && $GWD_DOCKER_GPG_SOURCE == https://* ]] || { echo 'Docker 软件源必须使用 HTTPS。'; return 1; }
+local docker_key
+docker_key=$(mktemp) || return 1
+gwdDockerDownload "${GWD_DOCKER_SOURCE%/}/linux/debian/gpg" "$docker_key" || gwdDockerDownload "${GWD_DOCKER_GPG_SOURCE%/}/linux/debian/gpg" "$docker_key" || { rm -f "$docker_key"; return 1; }
+gpg --dearmor <"$docker_key" >/usr/share/keyrings/docker-ce-archive-keyring.gpg || { rm -f "$docker_key"; return 1; }
+rm -f "$docker_key"
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-ce-archive-keyring.gpg] ${GWD_DOCKER_SOURCE%/}/linux/debian $(cat /etc/os-release | grep VERSION= | cut -d'(' -f2 | cut -d')' -f1) stable" >/etc/apt/sources.list.d/docker.list
 
 unset aptPKG
 [[ -z $(dpkg -l | awk '{print$2}' | grep '^docker-ce$') ]] && aptPKG+=(docker-ce)
@@ -33,11 +59,11 @@ EOF
 systemctl restart docker
 fi
 
-dockerComposeVer=$(curl -fsSL "https://api.github.com/repos/docker/compose/releases/latest" | jq -r .tag_name | grep -v '^null$')
-[[ -z $dockerComposeVer_reserved ]] && dockerComposeVer=$dockerComposeVer_reserved
+dockerComposeVer=$(curl -fsSL --connect-timeout 10 --max-time 30 "https://api.github.com/repos/docker/compose/releases/latest" | jq -r .tag_name | grep -v '^null$' || true)
+[[ -z $dockerComposeVer ]] && dockerComposeVer=$dockerComposeVer_reserved
 
-curl -L https://github.com/docker/compose/releases/download/$dockerComposeVer/docker-compose-$(uname -s)-$(uname -m) >/usr/local/bin/docker-compose
-chmod +x /usr/local/bin/docker-compose
+gwdDockerDownload "https://github.com/docker/compose/releases/download/$dockerComposeVer/docker-compose-$(uname -s)-$(uname -m)" /usr/local/bin/docker-compose || return 1
+chmod 755 /usr/local/bin/docker-compose
 
 echo -e "${WHITE}[ ${GREEN}✓ ${WHITE}]\c" && echo -e "\t${WHITE}Install Docker${cRES}"
 }

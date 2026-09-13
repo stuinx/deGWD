@@ -1,24 +1,46 @@
 #!/bin/bash
-chmod +x /opt/de_GWD/update
-if [[ $(du -sk /opt/de_GWD/update 2>/dev/null | awk '{print$1}') -le 1 ]]; then
-updateCMDaddr=$(jq -r '.update.updateCMD' /opt/de_GWD/0conf 2>/dev/null | grep -oP "https://\K[^']+" | sed s'/.$//')
-systemctl stop nftables
+set -u
 
-rm -rf /etc/resolv.conf
-cat << EOF >/etc/resolv.conf
-nameserver 119.29.29.29
-nameserver 180.76.76.76
-nameserver 114.114.114.114
-nameserver 223.5.5.5
-EOF
+[[ -f /opt/de_GWD/.repo/download.env ]] && source /opt/de_GWD/.repo/download.env
+updateCMD=$(jq -r '.update.updateCMD // empty' /opt/de_GWD/0conf) || exit 1
+updatePort=$(jq -r '.update.updatePort // empty' /opt/de_GWD/0conf) || exit 1
+[[ $updatePort =~ ^[0-9]{1,5}$ ]] || exit 1
+((10#$updatePort >= 1 && 10#$updatePort <= 65535)) || exit 1
+updatePort=$((10#$updatePort))
 
-wget -cqO /opt/de_GWD/update $updateCMDaddr
+updateURL=$(printf '%s\n' "$updateCMD" | sed -nE 's#.*(https://[^[:space:]"<>),;]+).*#\1#p' | head -n 1)
+[[ $updateURL == https://* ]] || { echo '更新命令必须包含 HTTPS 脚本地址。' >&2; exit 1; }
+
+urls=("$updateURL")
+if [[ -n ${GWD_GITHUB_PROXY:-} && $updateURL == https://raw.githubusercontent.com/* ]]; then
+    [[ $GWD_GITHUB_PROXY == https://* ]] || exit 1
+    urls=("${GWD_GITHUB_PROXY%/}/$updateURL" "$updateURL")
 fi
 
-updatePort=$(jq -r '.update.updatePort' /opt/de_GWD/0conf)
+mkdir -p /opt/de_GWD/.repo
+temporary=$(mktemp /opt/de_GWD/.repo/update-client.XXXXXX) || exit 1
+trap 'rm -f "$temporary"' EXIT
+downloaded=false
+for url in "${urls[@]}"; do
+    if curl -fSL --retry 2 --connect-timeout 10 --max-time 300 "$url" -o "$temporary" && [[ -s $temporary ]] && bash -n "$temporary"; then
+        downloaded=true
+        break
+    fi
+done
+[[ $downloaded == true ]] || { echo '更新脚本下载失败，原文件已保留。' >&2; exit 1; }
 
-kill $(ps -e | grep 'ttyd' | awk '{print$1}') >/dev/null 2>&1
-tmux kill-session -t updateGWD >/dev/null 2>&1
-sed -i "/ExecStart=/c\ExecStart=/usr/bin/tmux new -ds 'updateGWD' /usr/bin/ttyd -p $updatePort -o /opt/de_GWD/update" /etc/systemd/system/updateGWD.service
-systemctl daemon-reload >/dev/null
+chmod 700 "$temporary"
+mv -f "$temporary" /opt/de_GWD/.repo/update-client || exit 1
+cat <<'EOF' >/opt/de_GWD/update
+#!/bin/bash
+[[ -f /opt/de_GWD/.repo/download.env ]] && source /opt/de_GWD/.repo/download.env
+exec bash /opt/de_GWD/.repo/update-client "$@"
+EOF
+chmod 700 /opt/de_GWD/update
 
+if [[ -f /etc/systemd/system/updateGWD.service ]]; then
+    tmux kill-session -t updateGWD >/dev/null 2>&1 || true
+    pkill -x ttyd >/dev/null 2>&1 || true
+    sed -i "/ExecStart=/c\\ExecStart=/usr/bin/tmux new -ds 'updateGWD' /usr/bin/ttyd -p $updatePort -o /opt/de_GWD/update" /etc/systemd/system/updateGWD.service || exit 1
+    systemctl daemon-reload >/dev/null
+fi

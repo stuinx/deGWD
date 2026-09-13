@@ -13,3 +13,7 @@ fi
 if [[ -z $(jq -r '.v2nodeDIV.nodeSM.steam' /opt/de_GWD/0conf 2>/dev/null | grep -v '^null$') ]]; then
 cat /opt/de_GWD/.repo/Domains.games.txt >>/opt/de_GWD/mosdns/domains_listW
 fi
+
+# Resolve preset domains through the proxy DNS path even if domestic DNS returns a local address.
+jq -r 'to_entries[] | select(.key != "apple" and .key != "steam") | .value.domains[] | select(startswith("domain:")) | ltrimstr("domain:")' /var/www/html/routing-presets.json >>/opt/de_GWD/mosdns/domains_listB
+sort -u /opt/de_GWD/mosdns/domains_listB -o /opt/de_GWD/mosdns/domains_listB

@@ -14,18 +14,75 @@ architecture=$(dpkg --print-architecture)
 export DEBIAN_FRONTEND=noninteractive
 TTYD_Ver="1.7.3"
 branch="main"
+GWD_SOURCE_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+GWD_REPO=${GWD_REPO:-stuinx/deGWD}
+GWD_REF=${GWD_REF:-codex/install-test-20260913}
+GWD_GITHUB_PROXY=${GWD_GITHUB_PROXY:-}
+GWD_DOCKER_SOURCE=${GWD_DOCKER_SOURCE:-https://mirrors.tuna.tsinghua.edu.cn/docker-ce}
+GWD_DOCKER_GPG_SOURCE=${GWD_DOCKER_GPG_SOURCE:-https://download.docker.com}
+GWD_DEBIAN_MIRROR=${GWD_DEBIAN_MIRROR:-https://mirrors.tuna.tsinghua.edu.cn}
+branch="$GWD_REF"
+
+gwdDownload(){
+    local url=$1 output=$2 relative candidate temporary
+    url=${url#https://ghproxy.net/}
+    if [[ $url == https://raw.githubusercontent.com/jacyl4/de_GWD/* ]]; then
+        relative=${url#https://raw.githubusercontent.com/jacyl4/de_GWD/}
+        relative=${relative#*/}
+        if [[ -f "$GWD_SOURCE_DIR/$relative" ]]; then
+            cp -- "$GWD_SOURCE_DIR/$relative" "$output"
+            return $?
+        fi
+        url="https://raw.githubusercontent.com/$GWD_REPO/$GWD_REF/$relative"
+    fi
+    temporary=$(mktemp "${output}.download.XXXXXX") || return 1
+    local urls=("$url")
+    if [[ -n $GWD_GITHUB_PROXY && ( $url == https://raw.githubusercontent.com/* || $url == https://github.com/* ) ]]; then
+        [[ $GWD_GITHUB_PROXY == https://* ]] || { rm -f "$temporary"; echo 'GWD_GITHUB_PROXY 必须使用 HTTPS。' >&2; return 1; }
+        urls=("${GWD_GITHUB_PROXY%/}/$url" "$url")
+    fi
+    for candidate in "${urls[@]}"; do
+        if curl -fSL --retry 2 --connect-timeout 10 --max-time 300 "$candidate" -o "$temporary" && [[ -s $temporary ]]; then
+            mv -f -- "$temporary" "$output"
+            return $?
+        fi
+    done
+    rm -f -- "$temporary"
+    echo '下载失败，原有文件已保留。' >&2
+    return 1
+}
+
+gwdRead(){
+    local temporary result
+    temporary=$(mktemp) || return 1
+    gwdDownload "$1" "$temporary" && cat "$temporary"
+    result=$?
+    rm -f -- "$temporary"
+    return "$result"
+}
+
+gwdVerifiedDownload(){
+    local url=$1 output=$2 expected temporary
+    expected=$(gwdRead "$url.sha256sum") || return 1
+    [[ $expected =~ ^[a-fA-F0-9]{64}$ ]] || { echo '无效的 SHA-256 校验文件。' >&2; return 1; }
+    if [[ $(checkSum "$output" "$expected") == true ]]; then return 0; fi
+    temporary=$(mktemp "${output}.verified.XXXXXX") || return 1
+    if gwdDownload "$url" "$temporary" && [[ $(checkSum "$temporary" "$expected") == true ]]; then
+        mv -f -- "$temporary" "$output"
+        return $?
+    fi
+    if [[ -n $GWD_GITHUB_PROXY ]] && GWD_GITHUB_PROXY= gwdDownload "$url" "$temporary" && [[ $(checkSum "$temporary" "$expected") == true ]]; then
+        mv -f -- "$temporary" "$output"
+        return $?
+    fi
+    rm -f -- "$temporary"
+    echo 'SHA-256 校验未通过，安装已停止。' >&2
+    return 1
+}
 
 
-installCMD=`cat << EOF
-bash <(wget --no-check-certificate -qO- https://ghproxy.net/https://raw.githubusercontent.com/jacyl4/de_GWD/main/client)
-EOF
-`
 
-if [[ $architecture = "arm64" ]];then
-chnAPTsource="mirrors.tuna.tsinghua.edu.cn"
-elif [[ $architecture = "amd64" ]]; then
-chnAPTsource="mirrors.aliyun.com"
-fi
+installCMD="bash <(curl -fsSL https://raw.githubusercontent.com/$GWD_REPO/$GWD_REF/client)"
 
 pkgDEP1(){
 if [[ $architecture = "arm64" ]];then
@@ -70,8 +127,17 @@ unset aptPKG
 }
 
 pkgDEP2(){
-curl -fsSL https://download.docker.com/linux/debian/gpg | install -m 0644 -D /dev/stdin /usr/share/keyrings/docker-archive-keyring.gpg
-echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/debian $(cat /etc/os-release | grep VERSION= | cut -d'(' -f2 | cut -d')' -f1) stable" >/etc/apt/sources.list.d/docker.list
+local docker_key docker_keyring
+[[ $GWD_DOCKER_SOURCE == https://* ]] || { echo 'Docker 软件源必须使用 HTTPS。'; exit 1; }
+[[ $GWD_DOCKER_GPG_SOURCE == https://* ]] || { echo 'Docker GPG 地址必须使用 HTTPS。'; exit 1; }
+docker_key=$(mktemp) || exit 1
+docker_keyring=$(mktemp) || { rm -f "$docker_key"; exit 1; }
+gwdDownload "${GWD_DOCKER_SOURCE%/}/linux/debian/gpg" "$docker_key" || \
+gwdDownload "${GWD_DOCKER_GPG_SOURCE%/}/linux/debian/gpg" "$docker_key" || { rm -f "$docker_key" "$docker_keyring"; exit 1; }
+gpg --batch --dearmor <"$docker_key" >"$docker_keyring" || { rm -f "$docker_key" "$docker_keyring"; exit 1; }
+install -m 0644 -D "$docker_keyring" /usr/share/keyrings/docker-archive-keyring.gpg || exit 1
+rm -f "$docker_key" "$docker_keyring"
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] ${GWD_DOCKER_SOURCE%/}/linux/debian $(cat /etc/os-release | grep VERSION= | cut -d'(' -f2 | cut -d')' -f1) stable" >/etc/apt/sources.list.d/docker.list
 
 
 unset aptPKG
@@ -96,7 +162,7 @@ unset aptPKG
 }
 
 checkSum(){
-sha256sumL=$(sha256sum $1 2>/dev/null | awk '{print$1}')
+sha256sumL=$(sha256sum "$1" 2>/dev/null | awk '{print$1}')
 if [[ $sha256sumL = $2 ]]; then 
   echo "true"
 elif [[ $sha256sumL != $2 ]]; then
@@ -104,34 +170,23 @@ elif [[ $sha256sumL != $2 ]]; then
 fi
 }
 
-
+gwdConfigureAptMirror(){
+[[ $GWD_DEBIAN_MIRROR == https://* && $GWD_DEBIAN_MIRROR != *[[:space:]]* ]] || { echo "Debian 镜像地址必须使用 HTTPS 且不能包含空白。"; return 1; }
+cat << EOF >/etc/apt/sources.list
+deb ${GWD_DEBIAN_MIRROR%/}/debian bookworm main contrib non-free non-free-firmware
+deb ${GWD_DEBIAN_MIRROR%/}/debian-security bookworm-security main contrib non-free non-free-firmware
+deb ${GWD_DEBIAN_MIRROR%/}/debian bookworm-updates main contrib non-free non-free-firmware
+deb ${GWD_DEBIAN_MIRROR%/}/debian bookworm-backports main contrib non-free non-free-firmware
+EOF
+}
 
 preDL(){
 mkdir -p /opt/de_GWD
 mkdir -p /opt/de_GWD/.repo
 
-sha256sum_IPchnroute=$(curl -fsSLo- https://ghproxy.net/https://raw.githubusercontent.com/jacyl4/chnroute/main/IPchnroute.sha256sum)
-if [[ -n $sha256sum_IPchnroute ]] && [[ $(checkSum /opt/de_GWD/.repo/IPchnroute $sha256sum_IPchnroute) = "false" ]] ; then
-rm -rf /tmp/IPchnroute
-wget --no-check-certificate --show-progress -cqO /tmp/IPchnroute https://ghproxy.net/https://raw.githubusercontent.com/jacyl4/chnroute/main/IPchnroute
-[[ $(checkSum /tmp/IPchnroute $sha256sum_IPchnroute) = "false" ]] && echo -e "${WHITE}IPchnroute${RED} Download Failed${cRES}" && exit
-[[ $(checkSum /tmp/IPchnroute $sha256sum_IPchnroute) = "true" ]] && mv -f /tmp/IPchnroute /opt/de_GWD/.repo/IPchnroute
-fi
-
-if [[ -f "./de_GWD_$architecture.zip" ]]; then
-    mv -f ./de_GWD_$architecture.zip /opt/de_GWD/.repo/de_GWD.zip
-else
-    sha256sum_de_GWD=$(curl -fsSLo- https://ghproxy.net/https://raw.githubusercontent.com/jacyl4/de_GWD/main/de_GWD_"$architecture".zip.sha256sum)
-    if [[ -n $sha256sum_de_GWD ]] && [[ $(checkSum /opt/de_GWD/.repo/de_GWD.zip $sha256sum_de_GWD) = "false" ]]; then
-    rm -rf /tmp/de_GWD.zip
-    wget --no-check-certificate --show-progress -cqO /tmp/de_GWD.zip https://ghproxy.net/https://raw.githubusercontent.com/jacyl4/de_GWD/main/de_GWD_"$architecture".zip
-    [[ $(checkSum /tmp/de_GWD.zip $sha256sum_de_GWD) = "false" ]] && rm -rf /tmp/de_GWD.zip && wget --no-check-certificate --show-progress -cqO /tmp/de_GWD.zip https://de-gwd.accxio.workers.dev/de_GWD_"$architecture".zip
-    [[ $(checkSum /tmp/de_GWD.zip $sha256sum_de_GWD) = "false" ]] && echo -e "${WHITE}de_GWD Zip${RED} Download Failed${cRES}" && exit
-    [[ $(checkSum /tmp/de_GWD.zip $sha256sum_de_GWD) = "true" ]] && mv -f /tmp/de_GWD.zip /opt/de_GWD/.repo/de_GWD.zip
-    fi
-fi
-
-[[ -z $(unzip -tq /opt/de_GWD/.repo/de_GWD.zip | grep "No errors detected in compressed data") ]] && echo -e "${WHITE}de_GWD Zip${RED} Download Failed${cRES}" && exit
+gwdVerifiedDownload https://raw.githubusercontent.com/jacyl4/chnroute/main/IPchnroute /opt/de_GWD/.repo/IPchnroute || exit 1
+gwdVerifiedDownload "https://raw.githubusercontent.com/jacyl4/de_GWD/$branch/de_GWD_$architecture.zip" /opt/de_GWD/.repo/de_GWD.zip || exit 1
+unzip -tq /opt/de_GWD/.repo/de_GWD.zip >/dev/null || exit 1
 
 cat << "EOF" >/opt/de_GWD/tcpTime
 #!/bin/bash
@@ -149,45 +204,20 @@ chmod +x /opt/de_GWD/tcpTime
 
 repoDL(){
 echo -e "${WHITE}[...]\c" && echo -e "\t${WHITE}Repo Download${cRES}\r\c"
-sha256sum_nginx=$(curl -fsSLo- https://raw.githubusercontent.com/jacyl4/de_GWD/$branch/resource/nginx/nginx_"$architecture".sha256sum)
-sha256sum_nginxConf=$(curl -fsSLo- https://raw.githubusercontent.com/jacyl4/de_GWD/$branch/resource/nginx/nginxConf.zip.sha256sum)
-sha256sum_client=$(curl -fsSLo- https://raw.githubusercontent.com/jacyl4/de_GWD/$branch/resource/client/Archive.zip.sha256sum)
-
-if [[ $(checkSum /usr/sbin/nginx $sha256sum_nginx) = "false" ]]; then
-rm -rf /tmp/nginx
-wget --show-progress -cqO /tmp/nginx https://raw.githubusercontent.com/jacyl4/de_GWD/$branch/resource/nginx/nginx_"$architecture"
-[[ $(checkSum /tmp/nginx $sha256sum_nginx) = "false" ]] && echo -e "${WHITE}NGINX Core${RED} Download Failed${cRES}" && exit
-[[ $(checkSum /tmp/nginx $sha256sum_nginx) = "true" ]] && mv -f /tmp/nginx /usr/sbin/nginx && chmod +x /usr/sbin/nginx
-fi
-
-if [[ $(checkSum /opt/de_GWD/.repo/nginxConf.zip $sha256sum_nginxConf) = "false" ]]; then
-rm -rf /tmp/nginxConf.zip
-wget --show-progress -cqO /tmp/nginxConf.zip https://raw.githubusercontent.com/jacyl4/de_GWD/$branch/resource/nginx/nginxConf.zip
-[[ $(checkSum /tmp/nginxConf.zip $sha256sum_nginxConf) = "false" ]] && echo -e "${RED}Download Failed${cRES}" && exit
-[[ $(checkSum /tmp/nginxConf.zip $sha256sum_nginxConf) = "true" ]] && mv -f /tmp/nginxConf.zip /opt/de_GWD/.repo/nginxConf.zip
-fi
+gwdVerifiedDownload "https://raw.githubusercontent.com/jacyl4/de_GWD/$branch/resource/nginx/nginx_$architecture" /tmp/nginx || exit 1
+install -m 755 /tmp/nginx /usr/sbin/nginx || exit 1
+gwdVerifiedDownload "https://raw.githubusercontent.com/jacyl4/de_GWD/$branch/resource/nginx/nginxConf.zip" /opt/de_GWD/.repo/nginxConf.zip || exit 1
+# Require the custom UI archive; upstream archives would silently discard this customization.
+[[ -f "$GWD_SOURCE_DIR/resource/client/Archive.zip" || $GWD_REPO != jacyl4/de_GWD ]] || { echo '请从完整定制包目录运行 client。'; exit 1; }
+gwdVerifiedDownload "https://raw.githubusercontent.com/jacyl4/de_GWD/$branch/resource/client/Archive.zip" /opt/de_GWD/.repo/client.zip || exit 1
 
 if [[ $(ttyd -v 2>&1 | grep -o '[0-9]\.[0-9]\.[0-9]') != $TTYD_Ver ]]; then
-wget --show-progress -cqO /tmp/ttyd https://github.com/tsl0922/ttyd/releases/download/$TTYD_Ver/ttyd.$(uname -m)
+gwdDownload "https://github.com/tsl0922/ttyd/releases/download/$TTYD_Ver/ttyd.$(uname -m)" /tmp/ttyd || exit 1
 [[ $? -ne 0 ]] && echo -e "${WHITE}TTYD${RED} Download Failed${cRES}"
 [[ $(du -sk /tmp/ttyd 2>/dev/null | awk '{print$1}') -gt 1000 ]] && mv -f /tmp/ttyd /usr/bin/ttyd && chmod +x /usr/bin/ttyd && TTYD_UPDATE="true"
 fi
 
-if [[ $(checkSum /opt/de_GWD/.repo/client.zip $sha256sum_client) = "false" ]]; then
-rm -rf /tmp/client.zip
-wget --show-progress -cqO /tmp/client.zip https://raw.githubusercontent.com/jacyl4/de_GWD/$branch/resource/client/Archive.zip
-[[ $(checkSum /tmp/client.zip $sha256sum_client) = "false" ]] && echo -e "${WHITE}Client Zip${RED} Download Failed${cRES}" && exit
-[[ $(checkSum /tmp/client.zip $sha256sum_client) = "true" ]] && mv -f /tmp/client.zip /opt/de_GWD/.repo/client.zip
-fi
-
-localVer=$(awk 'NR==1' /opt/de_GWD/.repo/version.php 2>/dev/null)
-remoteVer=$(curl -fsSLo- https://raw.githubusercontent.com/jacyl4/de_GWD/main/version.php | head -n 1)
-
-if [[ $localVer != $remoteVer ]] || [[ ! -f '/opt/de_GWD/.repo/version.php' ]]; then
-rm -rf /opt/de_GWD/.repo/version.php
-wget --show-progress -cqO /opt/de_GWD/.repo/version.php https://raw.githubusercontent.com/jacyl4/de_GWD/main/version.php
-[[ $? -ne 0 ]] && echo -e "${WHITE}Version file${RED} Download Failed${cRES}" && exit
-fi
+gwdDownload "https://raw.githubusercontent.com/jacyl4/de_GWD/$branch/version.php" /opt/de_GWD/.repo/version.php || exit 1
 
 echo -e "${WHITE}[ ${GREEN}✓ ${WHITE}]\c" && echo -e "\t${WHITE}Repo Download${cRES}"
 }
@@ -622,6 +652,7 @@ rm -f /var/lib/dpkg/lock
 rm -f /var/lib/dpkg/lock-frontend
 dpkg --configure -a
 
+gwdConfigureAptMirror || exit 1
 pkgDEP1
 
 cat << EOF >/etc/default/rng-tools-debian
@@ -1751,12 +1782,7 @@ echo -e "${WHITE}[ ${GREEN}✓ ${WHITE}]\c" && echo -e "\t${WHITE}Deploy nftable
 
 updateAPT(){
 echo -e "${WHITE}[...]\c" && echo -e "\t${WHITE}Debian Updated${cRES}\r\c"
-cat << EOF >/etc/apt/sources.list
-deb http://cloudfront.debian.net/debian bookworm main contrib non-free non-free-firmware
-deb http://cloudfront.debian.net/debian-security bookworm-security main contrib non-free non-free-firmware
-deb http://cloudfront.debian.net/debian bookworm-updates main contrib non-free non-free-firmware
-deb http://cloudfront.debian.net/debian bookworm-backports main contrib non-free non-free-firmware
-EOF
+gwdConfigureAptMirror || exit 1
 
 echo "deb [signed-by=/etc/apt/keyrings/deb.sury.org.gpg] https://packages.sury.org/php/ $(cat /etc/os-release | grep VERSION= | cut -d'(' -f2 | cut -d')' -f1) main" >/etc/apt/sources.list.d/php.list
 apt-key del 95BD4743 >/dev/null 2>&1
@@ -2157,7 +2183,7 @@ chown -R www-data:www-data /var/www/html
 chmod -R +x /var/www/html
 chmod +x /opt/de_GWD/*
 
-if [[ $TTYD_UPDATE = "true" ]]; then
+if [[ $TTYD_UPDATE = "true" || ! -f /etc/systemd/system/updateGWD.service ]]; then
 [[ -z $(echo $updatePort | grep '^[[:digit:]]*$') ]] && updatePort="3000"
 
 rm -rf /lib/systemd/system/updateGWD.service
@@ -2184,6 +2210,21 @@ if [[ $(du -sk /var/www/html/spt 2>/dev/null | awk '{print$1}') -lt 102400 ]]; t
 fi
 
 cp -f /opt/de_GWD/.repo/version.php /var/www/html/act/version.php
+
+local settings
+settings=$(mktemp /opt/de_GWD/.repo/download.env.XXXXXX) || exit 1
+for name in GWD_REPO GWD_REF GWD_GITHUB_PROXY GWD_DOCKER_SOURCE GWD_DOCKER_GPG_SOURCE GWD_DEBIAN_MIRROR; do
+    printf 'export %s=%q\n' "$name" "${!name}"
+done >"$settings"
+chmod 600 "$settings"
+mv -f "$settings" /opt/de_GWD/.repo/download.env || exit 1
+jq --arg command "$installCMD" '.update.updateCMD=$command' /opt/de_GWD/0conf | sponge /opt/de_GWD/0conf
+if [[ -f /opt/de_GWD/autoUpdate ]]; then
+    local update_hour
+    update_hour=$(crontab -l 2>/dev/null | awk '/\/opt\/de_GWD\/autoUpdate/ {print $2; exit}')
+    [[ $update_hour =~ ^([0-9]|1[0-9]|2[0-3])$ ]] && /opt/de_GWD/ui-autoUpdateHour "$update_hour"
+fi
+return 0
 }
 
 
@@ -2329,9 +2370,7 @@ if [[ -n $(jq -r '.address.alias' /opt/de_GWD/0conf 2>/dev/null | grep -v '^null
   /opt/de_GWD/ui-markThis >/dev/null 2>&1
 fi
 
-if [[ $(jq -r '.v2nodeDIV.nodeSM.status' /opt/de_GWD/0conf 2>/dev/null) = "on" ]]; then
-  /opt/de_GWD/ui-NodeSM >/dev/null 2>&1
-fi
+/opt/de_GWD/ui-NodeSM || { echo "预定义分流配置失败"; exit 1; }
 
 if [[ $(jq -r '.v2nodeDIV.nodeCU.status' /opt/de_GWD/0conf 2>/dev/null) = "on" ]]; then
   /opt/de_GWD/ui-NodeCU >/dev/null 2>&1
@@ -2410,7 +2449,7 @@ fi
 
 
 installkernel(){
-bash <(wget --show-progress -cqO- https://raw.githubusercontent.com/jacyl4/de_GWD/main/resource/kernel/installkernel)
+bash <(wget --show-progress -cqO- https://raw.githubusercontent.com/$GWD_REPO/$GWD_REF/resource/kernel/installkernel)
 }
 
 
@@ -2527,9 +2566,9 @@ EOF
 
 if [[ $(cat /etc/os-release | grep VERSION= | cut -d'(' -f2 | cut -d')' -f1) = "stretch" ]]; then
 cat << EOF >/etc/apt/sources.list
-deb http://$chnAPTsource/debian buster main contrib non-free
-deb http://$chnAPTsource/debian buster-updates main contrib non-free
-deb http://$chnAPTsource/debian-security buster/updates main contrib non-free
+deb ${GWD_DEBIAN_MIRROR%/}/debian buster main contrib non-free
+deb ${GWD_DEBIAN_MIRROR%/}/debian buster-updates main contrib non-free
+deb ${GWD_DEBIAN_MIRROR%/}/debian-security buster/updates main contrib non-free
 EOF
 
 sed -i "s/ stretch / buster /g" /etc/apt/sources.list.d/* >/dev/null 2>&1
@@ -2537,12 +2576,7 @@ apt update --fix-missing && apt upgrade --allow-downgrades -y
 apt full-upgrade -y && apt autoremove --purge -y && apt clean -y && apt autoclean -y
 fi
 
-cat << EOF >/etc/apt/sources.list
-deb http://$chnAPTsource/debian bookworm main contrib non-free non-free-firmware
-deb http://$chnAPTsource/debian bookworm-updates main contrib non-free non-free-firmware
-deb http://$chnAPTsource/debian bookworm-backports main contrib non-free non-free-firmware
-deb http://$chnAPTsource/debian-security bookworm-security main contrib non-free non-free-firmware
-EOF
+gwdConfigureAptMirror || exit 1
 
 sed -i "s/ buster / bookworm /g" /etc/apt/sources.list.d/* >/dev/null 2>&1
 sed -i "s/ bullseye / bookworm /g" /etc/apt/sources.list.d/* >/dev/null 2>&1
@@ -2842,4 +2876,8 @@ read -p "Select:" num
     esac
 }
 
-start_menu
+if [[ ${1:-} == --auto-update ]]; then
+    updateGWD auto
+else
+    start_menu
+fi
