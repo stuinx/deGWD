@@ -19,7 +19,7 @@ else
   virt_type=${virt_type:-test}
 fi
 export DEBIAN_FRONTEND=noninteractive
-branch="dev"
+branch=${DE_GWD_BRANCH:-"dev-v2"}
 
 DE_GWD_DATA_DIR=${DE_GWD_DATA_DIR:-/opt/de_GWD}
 DE_GWD_XRAY_DIR=${DE_GWD_XRAY_DIR:-$DE_GWD_DATA_DIR/vtrui}

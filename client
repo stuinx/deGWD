@@ -13,7 +13,7 @@ chmod 1777 /tmp
 architecture=$(dpkg --print-architecture)
 export DEBIAN_FRONTEND=noninteractive
 TTYD_Ver="1.7.3"
-branch="dev"
+branch=${DE_GWD_BRANCH:-"dev-v2"}
 
 
 installCMD=`cat << EOF
@@ -180,20 +180,20 @@ chmod +x /opt/de_GWD/tcpTime
 
 repoDL(){
 echo -e "${WHITE}[...]\c" && echo -e "\t${WHITE}Repo Download${cRES}\r\c"
-sha256sum_nginx=$(curl -fsSLo- https://raw.githubusercontent.com/jacyl4/de_GWD/$branch/resource/nginx/nginx_"$architecture".sha256sum)
-sha256sum_nginxConf=$(curl -fsSLo- https://raw.githubusercontent.com/jacyl4/de_GWD/$branch/resource/nginx/nginxConf.zip.sha256sum)
-sha256sum_client=$(curl -fsSLo- https://raw.githubusercontent.com/jacyl4/de_GWD/$branch/resource/client/Archive.zip.sha256sum)
+sha256sum_nginx=$(curl -fsSLo- https://raw.githubusercontent.com/stuinx/deGWD/$branch/resource/nginx/nginx_"$architecture".sha256sum)
+sha256sum_nginxConf=$(curl -fsSLo- https://raw.githubusercontent.com/stuinx/deGWD/$branch/resource/nginx/nginxConf.zip.sha256sum)
+sha256sum_client=$(curl -fsSLo- https://raw.githubusercontent.com/stuinx/deGWD/$branch/resource/client/Archive.zip.sha256sum)
 
 if [[ $(checkSum /usr/sbin/nginx $sha256sum_nginx) = "false" ]]; then
 rm -rf /tmp/nginx
-wget --show-progress -cqO /tmp/nginx https://raw.githubusercontent.com/jacyl4/de_GWD/$branch/resource/nginx/nginx_"$architecture"
+wget --show-progress -cqO /tmp/nginx https://raw.githubusercontent.com/stuinx/deGWD/$branch/resource/nginx/nginx_"$architecture"
 [[ $(checkSum /tmp/nginx $sha256sum_nginx) = "false" ]] && echo -e "${WHITE}NGINX Core${RED} Download Failed${cRES}" && exit
 [[ $(checkSum /tmp/nginx $sha256sum_nginx) = "true" ]] && mv -f /tmp/nginx /usr/sbin/nginx && chmod +x /usr/sbin/nginx
 fi
 
 if [[ $(checkSum /opt/de_GWD/.repo/nginxConf.zip $sha256sum_nginxConf) = "false" ]]; then
 rm -rf /tmp/nginxConf.zip
-wget --show-progress -cqO /tmp/nginxConf.zip https://raw.githubusercontent.com/jacyl4/de_GWD/$branch/resource/nginx/nginxConf.zip
+wget --show-progress -cqO /tmp/nginxConf.zip https://raw.githubusercontent.com/stuinx/deGWD/$branch/resource/nginx/nginxConf.zip
 [[ $(checkSum /tmp/nginxConf.zip $sha256sum_nginxConf) = "false" ]] && echo -e "${RED}Download Failed${cRES}" && exit
 [[ $(checkSum /tmp/nginxConf.zip $sha256sum_nginxConf) = "true" ]] && mv -f /tmp/nginxConf.zip /opt/de_GWD/.repo/nginxConf.zip
 fi
@@ -206,17 +206,17 @@ fi
 
 if [[ $(checkSum /opt/de_GWD/.repo/client.zip $sha256sum_client) = "false" ]]; then
 rm -rf /tmp/client.zip
-wget --show-progress -cqO /tmp/client.zip https://raw.githubusercontent.com/jacyl4/de_GWD/$branch/resource/client/Archive.zip
+wget --show-progress -cqO /tmp/client.zip https://raw.githubusercontent.com/stuinx/deGWD/$branch/resource/client/Archive.zip
 [[ $(checkSum /tmp/client.zip $sha256sum_client) = "false" ]] && echo -e "${WHITE}Client Zip${RED} Download Failed${cRES}" && exit
 [[ $(checkSum /tmp/client.zip $sha256sum_client) = "true" ]] && mv -f /tmp/client.zip /opt/de_GWD/.repo/client.zip
 fi
 
 localVer=$(awk 'NR==1' /opt/de_GWD/.repo/version.php 2>/dev/null)
-remoteVer=$(curl -fsSLo- https://raw.githubusercontent.com/jacyl4/de_GWD/main/version.php | head -n 1)
+remoteVer=$(curl -fsSLo- https://raw.githubusercontent.com/stuinx/deGWD/$branch/version.php | head -n 1)
 
 if [[ $localVer != $remoteVer ]] || [[ ! -f '/opt/de_GWD/.repo/version.php' ]]; then
 rm -rf /opt/de_GWD/.repo/version.php
-wget --show-progress -cqO /opt/de_GWD/.repo/version.php https://raw.githubusercontent.com/jacyl4/de_GWD/main/version.php
+wget --show-progress -cqO /opt/de_GWD/.repo/version.php https://raw.githubusercontent.com/stuinx/deGWD/$branch/version.php
 [[ $? -ne 0 ]] && echo -e "${WHITE}Version file${RED} Download Failed${cRES}" && exit
 fi
 
